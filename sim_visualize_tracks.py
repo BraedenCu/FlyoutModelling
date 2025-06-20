@@ -1567,8 +1567,8 @@ class TrajectoryVisualizer:
             z_range = z_max - z_min
             max_range = max(x_range, y_range, z_range)
             
-            # Set camera position with extra margin to ensure everything is visible
-            camera_distance = max_range * 2.0  # Increased multiplier for better framing
+            # Set camera position with closer zoom for better detail
+            camera_distance = max_range * 0.5  # Reduced from 2.0 to 0.8 for closer view
             
             # Position camera at an angle to show 3D perspective
             camera_pos = (
@@ -1583,8 +1583,8 @@ class TrajectoryVisualizer:
                 (0, 0, 1)  # Up vector
             ]
             
-            # Zoom out slightly to ensure everything fits
-            self.plotter.camera.zoom(0.7)
+            # Zoom in closer to fit all data with less margin
+            self.plotter.camera.zoom(0.7)  # Increased from 0.7 to 1.2 for closer zoom
         else:
             # Fallback camera position
             self.plotter.camera_position = 'iso'
