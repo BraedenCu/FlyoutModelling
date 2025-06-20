@@ -1,0 +1,17 @@
+{
+  "dem_file": "topography_data/topography.tif",
+  "dem_type": "COP30",
+  "bounds": {
+    "west": -113.98402717492077,
+    "south": 32.87532035495496,
+    "east": -113.87670382507922,
+    "north": 32.965410445045045
+  },
+  "reference_origin": {
+    "latitude": 32.9203654,
+    "longitude": -113.9303655,
+    "altitude": 0.0
+  },
+  "download_date": "2025-06-19T21:58:30.450375",
+  "description": "DEM data downloaded from OpenTopography"
+}

@@ -31,36 +31,47 @@ def setup_wsl_display():
     """Configure display settings for WSL compatibility."""
     # Check if running in WSL
     is_wsl = False
+    is_wslg = False
     try:
         with open('/proc/version', 'r') as f:
-            if 'microsoft' in f.read().lower():
+            content = f.read().lower()
+            if 'microsoft' in content:
                 is_wsl = True
+                # Check for WSLg (Windows 11 feature)
+                if 'wslg' in content:
+                    is_wslg = True
     except:
         pass
     
     if is_wsl:
-        print("🔧 WSL detected - configuring display settings...")
-        
-        # Set environment variables for WSL graphics
-        os.environ['DISPLAY'] = ':0'
-        os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
-        
-        # Try to start X server if not running
-        try:
-            # Check if X server is running
-            result = subprocess.run(['xset', 'q'], capture_output=True, timeout=5)
-            if result.returncode != 0:
-                print("⚠️ X server not detected. Please ensure you have:")
-                print("   1. VcXsrv, Xming, or similar X server running on Windows")
-                print("   2. DISPLAY=:0 set in your WSL environment")
-                print("   3. WSLg enabled (Windows 11) or X server configured (Windows 10)")
+        if is_wslg:
+            print("🔧 WSLg detected (Windows 11) - using native graphics support")
+            # WSLg provides native graphics support, minimal configuration needed
+            os.environ['DISPLAY'] = ':0'
+            return True
+        else:
+            print("🔧 WSL detected (Windows 10) - configuring display settings...")
+            
+            # Set environment variables for WSL graphics
+            os.environ['DISPLAY'] = ':0'
+            os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
+            
+            # Try to start X server if not running
+            try:
+                # Check if X server is running
+                result = subprocess.run(['xset', 'q'], capture_output=True, timeout=5)
+                if result.returncode != 0:
+                    print("⚠️ X server not detected. Please ensure you have:")
+                    print("   1. VcXsrv, Xming, or similar X server running on Windows")
+                    print("   2. DISPLAY=:0 set in your WSL environment")
+                    print("   3. WSLg enabled (Windows 11) or X server configured (Windows 10)")
+                    return False
+                else:
+                    print("✅ X server detected and running")
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                print("⚠️ Could not verify X server status")
                 return False
-            else:
-                print("✅ X server detected and running")
-                return True
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            print("⚠️ Could not verify X server status")
-            return False
     
     return True
 
@@ -68,29 +79,49 @@ def configure_pyvista_for_wsl():
     """Configure PyVista settings for WSL compatibility."""
     # Check if running in WSL
     is_wsl = False
+    is_wslg = False
     try:
         with open('/proc/version', 'r') as f:
-            if 'microsoft' in f.read().lower():
+            content = f.read().lower()
+            if 'microsoft' in content:
                 is_wsl = True
+                # Check for WSLg (Windows 11 feature)
+                if 'wslg' in content:
+                    is_wslg = True
     except:
         pass
     
     if is_wsl:
-        print("🔧 Configuring PyVista for WSL...")
-        
-        # Set PyVista to use software rendering if needed
-        pv.global_theme.renderer = 'opengl2'
-        
-        # Configure for better WSL compatibility
-        pv.global_theme.window_size = [1024, 768]  # Smaller default window
-        pv.global_theme.anti_aliasing = 'fxaa'  # Use FXAA instead of MSAA
-        pv.global_theme.multi_samples = 1  # Reduce multisampling
-        
-        # Set fallback options
-        pv.global_theme.use_panel = False  # Disable panel for WSL
-        pv.global_theme.show_edges = False  # Reduce rendering complexity
-        
-        print("✅ PyVista configured for WSL")
+        if is_wslg:
+            print("🔧 Configuring PyVista for WSLg (Windows 11)...")
+            
+            # WSLg provides better graphics support, use more aggressive settings
+            pv.global_theme.renderer = 'opengl2'
+            pv.global_theme.window_size = [1280, 720]  # Larger window for WSLg
+            pv.global_theme.anti_aliasing = 'msaa'  # Use MSAA for better quality
+            pv.global_theme.multi_samples = 4  # Enable multisampling
+            
+            # Enable panel and other features that work well with WSLg
+            pv.global_theme.use_panel = True
+            pv.global_theme.show_edges = True
+            
+            print("✅ PyVista configured for WSLg with enhanced graphics")
+        else:
+            print("🔧 Configuring PyVista for WSL (Windows 10)...")
+            
+            # Set PyVista to use software rendering if needed
+            pv.global_theme.renderer = 'opengl2'
+            
+            # Configure for better WSL compatibility
+            pv.global_theme.window_size = [1024, 768]  # Smaller default window
+            pv.global_theme.anti_aliasing = 'fxaa'  # Use FXAA instead of MSAA
+            pv.global_theme.multi_samples = 1  # Reduce multisampling
+            
+            # Set fallback options
+            pv.global_theme.use_panel = False  # Disable panel for WSL
+            pv.global_theme.show_edges = False  # Reduce rendering complexity
+            
+            print("✅ PyVista configured for WSL with compatibility settings")
 
 @dataclass
 class TrajectoryPoint:
@@ -979,27 +1010,46 @@ class TrajectoryVisualizer:
         """Setup the main visualization window."""
         # Check if running in WSL and adjust window size accordingly
         is_wsl = False
+        is_wslg = False
         try:
             with open('/proc/version', 'r') as f:
-                if 'microsoft' in f.read().lower():
+                content = f.read().lower()
+                if 'microsoft' in content:
                     is_wsl = True
+                    # Check for WSLg (Windows 11 feature)
+                    if 'wslg' in content:
+                        is_wslg = True
         except:
             pass
         
         if is_wsl and not off_screen:
-            # Use smaller window size for WSL to avoid display issues
-            window_size = (1024, 768)
-            print("🔧 Using WSL-optimized window size: 1024x768")
+            if is_wslg:
+                # Use larger window size for WSLg (Windows 11) - better graphics support
+                window_size = (1280, 720)
+                print("🔧 Using WSLg-optimized window size: 1280x720")
+            else:
+                # Use smaller window size for WSL (Windows 10) to avoid display issues
+                window_size = (1024, 768)
+                print("🔧 Using WSL-optimized window size: 1024x768")
         
         # Create plotter with WSL-friendly settings
         if is_wsl:
-            # Use software rendering for better WSL compatibility
-            self.plotter = pv.Plotter(
-                off_screen=off_screen, 
-                window_size=window_size,
-                lighting='three lights',  # Use simpler lighting
-                multi_samples=1  # Reduce multisampling for WSL
-            )
+            if is_wslg:
+                # WSLg provides better graphics support, use enhanced settings
+                self.plotter = pv.Plotter(
+                    off_screen=off_screen, 
+                    window_size=window_size,
+                    lighting='three lights',  # Use standard lighting
+                    multi_samples=4  # Enable multisampling for WSLg
+                )
+            else:
+                # Use software rendering for better WSL compatibility
+                self.plotter = pv.Plotter(
+                    off_screen=off_screen, 
+                    window_size=window_size,
+                    lighting='three lights',  # Use simpler lighting
+                    multi_samples=1  # Reduce multisampling for WSL
+                )
         else:
             self.plotter = pv.Plotter(off_screen=off_screen, window_size=window_size)
         
@@ -1797,21 +1847,32 @@ def main():
     satellite_path = None
     satellite_data_dir = "satellite_data"
     if os.path.exists(satellite_data_dir):
-        # First look for quick version, then high-resolution version
+        # First look for quick version for faster processing
         quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
         if os.path.exists(quick_path):
             satellite_path = quick_path
-            print(f"Found quick satellite imagery: {satellite_path}")
+            file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+            print(f"Using quick satellite imagery for faster processing: {satellite_path} ({file_size_mb:.1f}MB)")
         else:
-            # Look for high-resolution satellite image formats
-            for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jp2', '.jpeg2000']:
-                for file in os.listdir(satellite_data_dir):
-                    if file.lower().endswith(ext):
-                        satellite_path = os.path.join(satellite_data_dir, file)
-                        print(f"Found high-resolution satellite imagery: {satellite_path}")
+            # Fallback to high-resolution files if quick version not available
+            jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
+            if jp2_files:
+                # Use the largest JP2 file (highest resolution)
+                jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
+                satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
+                file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                print(f"Found high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+            else:
+                # Look for other satellite image formats
+                for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
+                    for file in os.listdir(satellite_data_dir):
+                        if file.lower().endswith(ext):
+                            satellite_path = os.path.join(satellite_data_dir, file)
+                            file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                            print(f"Found satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                            break
+                    if satellite_path:
                         break
-                if satellite_path:
-                    break
     
     # Create static visualization
     print("Creating static visualization...")
@@ -1834,7 +1895,7 @@ def main():
         print("⚠️ Display issues detected. Interactive visualization may not work properly.")
         print("   Consider using one of these alternatives:")
         print("   1. Run on Windows directly (not WSL)")
-        print("   2. Use WSLg (Windows 11)")
+        print("   2. Use WSLg (Windows 11) - update WSL: wsl --update")
         print("   3. Install and configure VcXsrv or Xming on Windows")
         print("   4. Use the static visualization and animation files instead")
         
@@ -1850,6 +1911,19 @@ def main():
             print("\nSkipping interactive visualization.")
             return
     
+    # Check if running in WSLg for better messaging
+    is_wslg = False
+    try:
+        with open('/proc/version', 'r') as f:
+            content = f.read().lower()
+            if 'microsoft' in content and 'wslg' in content:
+                is_wslg = True
+    except:
+        pass
+    
+    if is_wslg:
+        print("🎉 WSLg detected - interactive visualization should work well!")
+    
     try:
         if satellite_path:
             visualizer.create_interactive_visualization(satellite_path)
@@ -1857,7 +1931,10 @@ def main():
             visualizer.create_interactive_visualization()
     except Exception as e:
         print(f"❌ Interactive visualization failed: {e}")
-        print("This is common in WSL. The static visualization and animation files should still work.")
+        if is_wslg:
+            print("This is unexpected with WSLg. Try updating WSL: wsl --update")
+        else:
+            print("This is common in WSL. The static visualization and animation files should still work.")
         print("Generated files:")
         print("   - trajectory_static.png (static visualization)")
         print("   - trajectory_animation.mp4 (animation)")
