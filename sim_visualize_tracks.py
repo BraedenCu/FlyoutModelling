@@ -61,6 +61,163 @@ class CollisionEvent:
     explosion_duration: float = 2.0  # Duration of explosion animation in seconds
     explosion_radius: float = 10.0  # Maximum radius of explosion effect
 
+class SatelliteImageryManager:
+    """Manages satellite imagery overlay for topography visualization."""
+    
+    def __init__(self, ref_origin=(0.0, 0.0, 0.0)):
+        self.ref_origin = ref_origin
+        self.satellite_texture = None
+        self.satellite_bounds = None
+        self.transformer_enu2llh = None
+        self.transformer_llh2enu = None
+        self._setup_transformers()
+        
+    def _setup_transformers(self):
+        lat0, lon0, h0 = self.ref_origin
+        # WGS84 geodetic to ENU local tangent plane
+        self.transformer_llh2enu = Transformer.from_crs(
+            "EPSG:4326",  # WGS84 lat/lon
+            f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +ellps=WGS84",  # Local ENU
+            always_xy=True
+        )
+        
+        # ENU local tangent plane to WGS84 geodetic
+        self.transformer_enu2llh = Transformer.from_crs(
+            f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +ellps=WGS84",  # Local ENU
+            "EPSG:4326",  # WGS84 lat/lon
+            always_xy=True
+        )
+    
+    def load_satellite_imagery(self, image_path: str) -> bool:
+        """
+        Load satellite imagery from file and create PyVista texture.
+        Args:
+            image_path: Path to satellite image file (GeoTIFF, BIL, JP2, etc.)
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            print(f"Loading satellite imagery from: {image_path}")
+            
+            # Handle different file formats
+            if image_path.lower().endswith(('.jp2', '.jpeg2000')):
+                # Use rasterio for JPEG2000 files
+                with rasterio.open(image_path) as src:
+                    if src.count >= 3:
+                        # RGB imagery
+                        sat_img = src.read([1, 2, 3])  # RGB bands
+                        print(f"Loaded RGB satellite imagery: {sat_img.shape}")
+                    else:
+                        # Single band - convert to RGB (grayscale)
+                        sat_img = src.read(1)
+                        sat_img = np.stack([sat_img, sat_img, sat_img], axis=0)
+                        print(f"Loaded single-band satellite imagery, converted to RGB: {sat_img.shape}")
+                    
+                    # Get georeferencing information
+                    transform = src.transform
+                    bounds = src.bounds
+                    self.satellite_bounds = bounds
+                    
+                    print(f"Satellite image bounds: {bounds}")
+                    print(f"Satellite image transform: {transform}")
+            else:
+                # Use rasterio for other formats
+                with rasterio.open(image_path) as src:
+                    # Check if it's RGB imagery (3 bands) or single band
+                    if src.count >= 3:
+                        # RGB imagery
+                        sat_img = src.read([1, 2, 3])  # RGB bands
+                        print(f"Loaded RGB satellite imagery: {sat_img.shape}")
+                    else:
+                        # Single band - convert to RGB (grayscale)
+                        sat_img = src.read(1)
+                        sat_img = np.stack([sat_img, sat_img, sat_img], axis=0)
+                        print(f"Loaded single-band satellite imagery, converted to RGB: {sat_img.shape}")
+                    
+                    # Get georeferencing information
+                    transform = src.transform
+                    bounds = src.bounds
+                    self.satellite_bounds = bounds
+                    
+                    print(f"Satellite image bounds: {bounds}")
+                    print(f"Satellite image transform: {transform}")
+            
+            print(f"Original data type: {sat_img.dtype}")
+            print(f"Original value ranges:")
+            for i in range(sat_img.shape[0]):
+                band = sat_img[i]
+                print(f"  Band {i+1}: {band.min()} to {band.max()}")
+            
+            # Ensure we have uint8 data for PyVista
+            if sat_img.dtype != np.uint8:
+                if sat_img.dtype == np.uint16:
+                    # Scale from uint16 to uint8
+                    sat_img = (sat_img / 256).astype(np.uint8)
+                else:
+                    # For other types, normalize to uint8
+                    sat_img = sat_img.astype(np.float32)
+                    for i in range(sat_img.shape[0]):
+                        band = sat_img[i]
+                        band_min, band_max = np.nanmin(band), np.nanmax(band)
+                        if band_max > band_min:
+                            sat_img[i] = (band - band_min) / (band_max - band_min)
+                    sat_img = (sat_img * 255).astype(np.uint8)
+            
+            # Handle NaN values
+            sat_img = np.nan_to_num(sat_img, nan=0).astype(np.uint8)
+            
+            # Transpose for PyVista: (bands, height, width) -> (height, width, bands)
+            sat_img = np.moveaxis(sat_img, 0, -1)
+            
+            print(f"Final image shape: {sat_img.shape}")
+            print(f"Final data type: {sat_img.dtype}")
+            print(f"Final value range: {sat_img.min()} to {sat_img.max()}")
+            
+            # Create PyVista texture
+            self.satellite_texture = pv.numpy_to_texture(sat_img)
+            
+            print(f"✅ Successfully created satellite texture: {sat_img.shape}")
+            return True
+            
+        except Exception as e:
+            print(f"Error loading satellite imagery: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def get_texture_coordinates(self, X: np.ndarray, Y: np.ndarray) -> np.ndarray:
+        """
+        Calculate texture coordinates for satellite imagery overlay.
+        Args:
+            X, Y: ENU coordinate arrays
+        Returns:
+            Texture coordinates array (u, v) in [0, 1] range
+        """
+        if self.satellite_bounds is None:
+            # Fallback: use normalized coordinates
+            u = (X - X.min()) / (X.max() - X.min())
+            v = (Y - Y.min()) / (Y.max() - Y.min())
+            return np.column_stack([u.flatten(), v.flatten()])
+        
+        try:
+            # For now, use simple normalized coordinates since coordinate systems don't match
+            # This will map the satellite image to cover the entire topography area
+            u = (X - X.min()) / (X.max() - X.min())
+            v = (Y - Y.min()) / (Y.max() - Y.min())
+            
+            # Clamp to [0, 1] range
+            u = np.clip(u, 0.0, 1.0)
+            v = np.clip(v, 0.0, 1.0)
+            
+            return np.column_stack([u.flatten(), v.flatten()])
+            
+        except Exception as e:
+            print(f"Error calculating texture coordinates: {e}")
+            # Fallback: use normalized coordinates
+            u = (X - X.min()) / (X.max() - X.min())
+            v = (Y - Y.min()) / (Y.max() - Y.min())
+            return np.column_stack([u.flatten(), v.flatten()])
+
 class TopographyManager:
     """Manages downloading and processing topographic data from OpenTopography."""
     
@@ -72,6 +229,7 @@ class TopographyManager:
         self.ref_origin = ref_origin  # (lat0, lon0, h0)
         self.transformer_enu2llh = None
         self.transformer_llh2enu = None
+        self.satellite_manager = SatelliteImageryManager(ref_origin=ref_origin)
         self._setup_transformers()
         
     def _setup_transformers(self):
@@ -554,9 +712,18 @@ class TrajectoryVisualizer:
         padding = 500  # 500 meters padding for real-world DEM data
         return (x_min - padding, x_max + padding, y_min - padding, y_max + padding)
     
-    def setup_topography(self, bounds: Tuple[float, float, float, float]):
-        """Setup topographic data for visualization."""
+    def setup_topography(self, bounds: Tuple[float, float, float, float], satellite_path: str = None):
+        """Setup topographic data for visualization with optional satellite overlay."""
         print("Setting up topography...")
+        
+        # Load satellite imagery if provided
+        if satellite_path and os.path.exists(satellite_path):
+            print("Loading satellite imagery overlay...")
+            success = self.topography_manager.satellite_manager.load_satellite_imagery(satellite_path)
+            if success:
+                print("✅ Satellite imagery loaded successfully")
+            else:
+                print("⚠️ Failed to load satellite imagery, using topography only")
         
         # Get topographic data
         topo_data = self.topography_manager.get_dem_data(bounds)
@@ -582,6 +749,17 @@ class TrajectoryVisualizer:
         grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
         grid.dimensions = [X.shape[1], X.shape[0], 1]
         
+        # Add elevation data as scalar field
+        grid.point_data['elevation'] = Z.flatten()
+        
+        # Add satellite texture if available
+        tex_coords = None
+        if self.topography_manager.satellite_manager.satellite_texture is not None:
+            print("Adding satellite texture to topography mesh...")
+            # Calculate texture coordinates
+            tex_coords = self.topography_manager.satellite_manager.get_texture_coordinates(X, Y)
+            print(f"Texture coordinates shape: {tex_coords.shape}")
+        
         self.topography_mesh = grid
         
         # Create a surface mesh for better visualization
@@ -590,6 +768,14 @@ class TrajectoryVisualizer:
         
         # Add elevation data as scalar field
         surface.point_data['elevation'] = Z.flatten()
+        
+        # Add texture coordinates to surface if available
+        if tex_coords is not None:
+            # Use the newer PyVista API
+            surface.active_texture_coordinates = tex_coords.astype(np.float32)
+            print(f"✅ Set texture coordinates on surface mesh")
+            print(f"Texture coordinates shape: {tex_coords.shape}")
+            print(f"Texture coordinates range: {tex_coords.min()} to {tex_coords.max()}")
         
         self.topography_mesh = surface
     
@@ -772,29 +958,47 @@ class TrajectoryVisualizer:
             self.plotter.camera.zoom(1.5)
     
     def add_topography_to_plot(self):
-        """Add topography to the visualization."""
+        """Add topography to the visualization with optional satellite overlay."""
         if self.topography_mesh is None:
             return
         
-        # Create custom colormap for topography
-        colors = ['darkgreen', 'forestgreen', 'yellow', 'orange', 'brown', 'white']
-        n_bins = 256
-        cmap = LinearSegmentedColormap.from_list('terrain', colors, N=n_bins)
-        
-        # Add topography mesh
-        self.plotter.add_mesh(
-            self.topography_mesh,
-            scalars='elevation',
-            cmap=cmap,
-            show_edges=False,
-            lighting=True,
-            ambient=0.3,
-            diffuse=0.7,
-            specular=0.2,
-            specular_power=15,
-            smooth_shading=True,
-            opacity=0.9
-        )
+        # Check if satellite texture is available
+        if self.topography_manager.satellite_manager.satellite_texture is not None:
+            print("Adding topography with satellite imagery overlay...")
+            # Add topography mesh with satellite texture
+            self.plotter.add_mesh(
+                self.topography_mesh,
+                texture=self.topography_manager.satellite_manager.satellite_texture,
+                show_edges=False,
+                lighting=True,
+                ambient=0.3,
+                diffuse=0.7,
+                specular=0.2,
+                specular_power=15,
+                smooth_shading=True,
+                opacity=0.95
+            )
+        else:
+            print("Adding topography with elevation colormap...")
+            # Create custom colormap for topography
+            colors = ['darkgreen', 'forestgreen', 'yellow', 'orange', 'brown', 'white']
+            n_bins = 256
+            cmap = LinearSegmentedColormap.from_list('terrain', colors, N=n_bins)
+            
+            # Add topography mesh with elevation colormap
+            self.plotter.add_mesh(
+                self.topography_mesh,
+                scalars='elevation',
+                cmap=cmap,
+                show_edges=False,
+                lighting=True,
+                ambient=0.3,
+                diffuse=0.7,
+                specular=0.2,
+                specular_power=15,
+                smooth_shading=True,
+                opacity=0.9
+            )
     
     def add_trajectories_to_plot(self, trajectory_meshes: Dict[int, pv.PolyData]):
         """Add trajectory meshes to the visualization."""
@@ -1260,8 +1464,8 @@ class TrajectoryVisualizer:
             print("ffmpeg not found or failed. Please install ffmpeg to create videos.")
             print("Individual frames are available in the temporary directory.")
     
-    def create_static_visualization(self, save_path: str = None):
-        """Create a static visualization of all trajectories."""
+    def create_static_visualization(self, save_path: str = None, satellite_path: str = None):
+        """Create a static visualization of all trajectories with optional satellite overlay."""
         if not self.trajectories:
             print("No trajectories loaded!")
             return
@@ -1269,8 +1473,8 @@ class TrajectoryVisualizer:
         # Calculate bounds
         bounds = self.calculate_bounds()
         
-        # Setup topography
-        self.setup_topography(bounds)
+        # Setup topography with optional satellite overlay
+        self.setup_topography(bounds, satellite_path)
         
         # Setup visualization (off_screen if saving)
         self.setup_visualization(off_screen=bool(save_path))
@@ -1300,6 +1504,8 @@ class TrajectoryVisualizer:
             legend_text += "\nOrange/Purple: Missiles"
         if self.protected_regions:
             legend_text += "\nRed Cylinders: Protected Regions"
+        if satellite_path:
+            legend_text += "\nSatellite imagery overlay enabled"
         
         self.plotter.add_text(
             legend_text,
@@ -1315,8 +1521,8 @@ class TrajectoryVisualizer:
         else:
             self.plotter.show()
     
-    def create_interactive_visualization(self):
-        """Create an interactive visualization."""
+    def create_interactive_visualization(self, satellite_path: str = None):
+        """Create an interactive visualization with optional satellite overlay."""
         if not self.trajectories:
             print("No trajectories loaded!")
             return
@@ -1324,8 +1530,8 @@ class TrajectoryVisualizer:
         # Calculate bounds
         bounds = self.calculate_bounds()
         
-        # Setup topography
-        self.setup_topography(bounds)
+        # Setup topography with optional satellite overlay
+        self.setup_topography(bounds, satellite_path)
         
         # Setup visualization
         self.setup_visualization()
@@ -1355,6 +1561,8 @@ class TrajectoryVisualizer:
             interactive_text += "\nOrange/Purple cylinders show missiles"
         if self.protected_regions:
             interactive_text += "\nRed cylinders show protected regions"
+        if satellite_path:
+            interactive_text += "\nSatellite imagery overlay enabled"
         
         self.plotter.add_text(
             interactive_text,
@@ -1366,34 +1574,73 @@ class TrajectoryVisualizer:
         # Show interactive window
         self.plotter.show()
 
+    def add_collision_markers_to_plot(self):
+        """Add collision markers as X symbols to the visualization."""
+        if not self.collision_events:
+            return
+        
+        for collision in self.collision_events:
+            # Create an X symbol at the collision point
+            pos = collision.position
+            size = 50  # Size of the X symbol
+            
+            # Create two perpendicular lines to form an X
+            # Line 1: diagonal from top-left to bottom-right
+            x1_start = pos[0] - size/2
+            y1_start = pos[1] - size/2
+            z1_start = pos[2] - size/2
+            x1_end = pos[0] + size/2
+            y1_end = pos[1] + size/2
+            z1_end = pos[2] + size/2
+            
+            # Line 2: diagonal from top-right to bottom-left
+            x2_start = pos[0] + size/2
+            y2_start = pos[1] - size/2
+            z2_start = pos[2] - size/2
+            x2_end = pos[0] - size/2
+            y2_end = pos[1] + size/2
+            z2_end = pos[2] + size/2
+            
+            # Create line meshes
+            line1 = pv.lines_from_points([[x1_start, y1_start, z1_start], [x1_end, y1_end, z1_end]])
+            line2 = pv.lines_from_points([[x2_start, y2_start, z2_start], [x2_end, y2_end, z2_end]])
+            
+            # Add X lines to plot
+            self.plotter.add_mesh(
+                line1,
+                color='red',
+                line_width=8,
+                render_lines_as_tubes=True
+            )
+            self.plotter.add_mesh(
+                line2,
+                color='red',
+                line_width=8,
+                render_lines_as_tubes=True
+            )
+            
+            # Add collision label
+            self.plotter.add_point_labels(
+                [pos],
+                [f'Collision {collision.participants}'],
+                font_size=14,
+                bold=True,
+                text_color='red',
+                shape_color='red',
+                shape_opacity=0.8
+            )
+
 def main():
-    """Main function to demonstrate the visualization suite."""
+    """Main function to run the trajectory visualization suite."""
     print("🚀 Trajectory Visualization Suite")
     print("=" * 50)
     
-    # Load reference LLA first
+    # Load reference location
     print("Loading reference LLA...")
-    with open('input.py', 'r') as f:
-        data = json.load(f)
+    visualizer = TrajectoryVisualizer()
+    ref_origin = visualizer.load_reference_lla_from_json('input.py')
     
-    ref_origin = (0.0, 0.0, 0.0)  # Default
-    if 'reference_lla' in data:
-        ref_data = data['reference_lla']
-        ref_origin = (
-            ref_data['latitude'],
-            ref_data['longitude'], 
-            ref_data['altitude']
-        )
-        print(f"Reference LLA: {ref_origin}")
-        if 'description' in ref_data:
-            print(f"Reference location: {ref_data['description']}")
-    else:
-        print("No reference_lla found, using default (0, 0, 0)")
-    
-    # Create visualizer with reference origin
-    visualizer = TrajectoryVisualizer(ref_origin=ref_origin)
-    
-    # Load trajectories
+    # Load trajectory data
     print("Loading trajectory data...")
     trajectories = visualizer.load_trajectories_from_json('input.py')
     print(f"Loaded {len(trajectories)} trajectories")
@@ -1403,28 +1650,51 @@ def main():
     protected_regions = visualizer.load_protected_regions_from_json('input.py')
     print(f"Loaded {len(protected_regions)} protected regions")
     
-    # Load missiles
+    # Load missile data
     print("Loading missile data...")
     missiles = visualizer.load_missiles_from_json('input.py')
     print(f"Loaded {len(missiles)} missiles")
     
     # Detect collisions
     print("Detecting collisions...")
-    collision_events = visualizer.detect_collisions()
+    collisions = visualizer.detect_collisions()
+    print(f"Detected {len(collisions)} collision events")
+    
+    # Check for satellite imagery
+    satellite_path = None
+    satellite_data_dir = "satellite_data"
+    if os.path.exists(satellite_data_dir):
+        # First look for quick version, then high-resolution version
+        quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
+        if os.path.exists(quick_path):
+            satellite_path = quick_path
+            print(f"Found quick satellite imagery: {satellite_path}")
+        else:
+            # Look for high-resolution satellite image formats
+            for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jp2', '.jpeg2000']:
+                for file in os.listdir(satellite_data_dir):
+                    if file.lower().endswith(ext):
+                        satellite_path = os.path.join(satellite_data_dir, file)
+                        print(f"Found high-resolution satellite imagery: {satellite_path}")
+                        break
+                if satellite_path:
+                    break
     
     # Create static visualization
     print("Creating static visualization...")
-    visualizer.create_static_visualization('trajectory_static.png')
-    
-    # Create animation
-    print("Creating animation...")
-    trajectory_meshes = visualizer.create_trajectory_meshes()
-    missile_meshes = visualizer.create_missile_meshes()
-    visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4')
+    if satellite_path:
+        print(f"Using satellite imagery: {satellite_path}")
+        visualizer.create_static_visualization('trajectory_static.png', satellite_path)
+    else:
+        print("No satellite imagery found, using elevation colormap")
+        visualizer.create_static_visualization('trajectory_static.png')
     
     # Create interactive visualization
     print("Creating interactive visualization...")
-    visualizer.create_interactive_visualization()
+    if satellite_path:
+        visualizer.create_interactive_visualization(satellite_path)
+    else:
+        visualizer.create_interactive_visualization()
     
     print("✅ Visualization complete!")
 
