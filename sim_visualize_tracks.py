@@ -46,7 +46,7 @@ def setup_wsl_display():
     if is_wsl:
         if is_wslg:
             print("🔧 WSLg detected (Windows 11) - using native graphics support")
-            # WSLg provides native graphics support, minimal configuration needed
+            # WSLg provides native graphics support, no X server needed
             os.environ['DISPLAY'] = ':0'
             return True
         else:
@@ -1798,7 +1798,23 @@ def main():
     
     # Setup WSL-specific configurations
     configure_pyvista_for_wsl()
-    display_ok = setup_wsl_display()
+    
+    # Check if running in WSLg for better messaging
+    is_wslg = False
+    try:
+        with open('/proc/version', 'r') as f:
+            content = f.read().lower()
+            if 'microsoft' in content and 'wslg' in content:
+                is_wslg = True
+    except:
+        pass
+    
+    if is_wslg:
+        print("🎉 WSLg detected - native graphics support available!")
+        # WSLg doesn't need X server checks
+        display_ok = True
+    else:
+        display_ok = setup_wsl_display()
     
     # Load reference location
     print("Loading reference LLA...")
