@@ -22,90 +22,64 @@ from rasterio.transform import from_origin
 from pyproj import Proj, Transformer
 import platform
 import subprocess
+import signal
+import sys
+import atexit
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore")
 
-# WSL-specific configuration
-def setup_wsl_display():
-    """Configure display settings for WSL compatibility."""
-    # Check if running in WSL
-    is_wsl = False
-    is_wslg = False
-    try:
-        with open('/proc/version', 'r') as f:
-            content = f.read().lower()
-            if 'microsoft' in content:
-                is_wsl = True
-                # Check for WSLg (Windows 11 feature)
-                if 'wslg' in content:
-                    is_wslg = True
-    except:
-        pass
-    
-    if is_wsl:
-        if is_wslg:
-            print("🔧 WSLg detected (Windows 11) - using native graphics support")
-            # WSLg provides native graphics support, no X server needed
-            os.environ['DISPLAY'] = ':0'
-            return True
-        else:
-            print("🔧 WSL detected (Windows 10) - configuring display settings...")
-            
-            # Set environment variables for WSL graphics
-            os.environ['DISPLAY'] = ':0'
-            os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
-            
-            # Try to start X server if not running
-            try:
-                # Check if X server is running
-                result = subprocess.run(['xset', 'q'], capture_output=True, timeout=5)
-                if result.returncode != 0:
-                    print("⚠️ X server not detected. Please ensure you have:")
-                    print("   1. VcXsrv, Xming, or similar X server running on Windows")
-                    print("   2. DISPLAY=:0 set in your WSL environment")
-                    print("   3. WSLg enabled (Windows 11) or X server configured (Windows 10)")
-                    return False
-                else:
-                    print("✅ X server detected and running")
-                    return True
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                print("⚠️ Could not verify X server status")
-                return False
-    
-    return True
+# Global cleanup variables
+cleanup_required = False
+plotter_instance = None
 
-def configure_pyvista_for_wsl():
-    """Configure PyVista settings for WSL compatibility."""
-    # Check if running in WSL
-    is_wsl = False
-    is_wslg = False
-    try:
-        with open('/proc/version', 'r') as f:
-            content = f.read().lower()
-            if 'microsoft' in content:
-                is_wsl = True
-                # Check for WSLg (Windows 11 feature)
-                if 'wslg' in content:
-                    is_wslg = True
-    except:
-        pass
+def signal_handler(signum, frame):
+    """Handle interrupt signals gracefully."""
+    print(f"\n🛑 Received signal {signum} - cleaning up...")
+    cleanup_and_exit()
+
+def cleanup_and_exit():
+    """Clean up resources and exit gracefully."""
+    global cleanup_required, plotter_instance
     
-    if is_wsl:
-        if is_wslg:
-            print("🔧 Configuring PyVista for WSLg (Windows 11)...")
-            
-            # WSLg provides better graphics support, use larger window
-            pv.global_theme.window_size = [1280, 720]  # Larger window for WSLg
-            
-            print("✅ PyVista configured for WSLg with enhanced graphics")
-        else:
-            print("🔧 Configuring PyVista for WSL (Windows 10)...")
-            
-            # Configure for better WSL compatibility
-            pv.global_theme.window_size = [1024, 768]  # Smaller default window
-            
-            print("✅ PyVista configured for WSL with compatibility settings")
+    if cleanup_required:
+        print("🧹 Cleaning up resources...")
+        
+        # Close PyVista plotter if it exists
+        if plotter_instance is not None:
+            try:
+                plotter_instance.close()
+                print("✅ PyVista plotter closed")
+            except:
+                pass
+        
+        # Close any matplotlib figures
+        try:
+            plt.close('all')
+            print("✅ Matplotlib figures closed")
+        except:
+            pass
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        print("✅ Memory cleaned up")
+    
+    print("👋 Exiting gracefully")
+    sys.exit(0)
+
+def register_cleanup(plotter=None):
+    """Register cleanup functions for graceful exit."""
+    global cleanup_required, plotter_instance
+    cleanup_required = True
+    plotter_instance = plotter
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Register cleanup on normal exit
+    atexit.register(cleanup_and_exit)
 
 # WSLg-specific configuration for Windows 11
 def setup_wslg_display():
@@ -620,16 +594,41 @@ class TrajectoryVisualizer:
     """Main visualization class for trajectory display."""
     
     def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0)):
-        self.ref_origin = ref_origin
-        self.topography_manager = topography_manager or TopographyManager(ref_origin=ref_origin)
-        self.plotter = None
+        """Initialize the trajectory visualizer."""
         self.trajectories = []
         self.missiles = []
         self.protected_regions = []
         self.collision_events = []
+        self.plotter = None
         self.topography_mesh = None
         self.animation_data = []
         
+        # Initialize topography manager
+        if topography_manager is None:
+            self.topography_manager = TopographyManager(ref_origin=ref_origin)
+        else:
+            self.topography_manager = topography_manager
+        
+        # Register cleanup for graceful exit
+        register_cleanup()
+    
+    def close(self):
+        """Close the visualizer and clean up resources."""
+        if self.plotter is not None:
+            try:
+                self.plotter.close()
+                self.plotter = None
+            except:
+                pass
+        
+        # Clear large data structures
+        self.topography_mesh = None
+        self.animation_data = []
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+    
     def load_trajectories_from_json(self, json_file: str) -> List[Trajectory]:
         """Load trajectory data from JSON file."""
         with open(json_file, 'r') as f:
@@ -1061,6 +1060,9 @@ class TrajectoryVisualizer:
             )
         else:
             self.plotter = pv.Plotter(off_screen=off_screen, window_size=window_size)
+        
+        # Register plotter for cleanup
+        register_cleanup(self.plotter)
         
         # Set background
         self.plotter.set_background('black')
@@ -1820,135 +1822,151 @@ class TrajectoryVisualizer:
 
 def main():
     """Main function to run the trajectory visualization suite."""
-    print("🚀 Trajectory Visualization Suite")
-    print("=" * 50)
-    
-    # Setup WSLg-specific configurations
-    configure_pyvista_for_wslg()
-    display_ok = setup_wslg_display()
-    
-    # Load reference location
-    print("Loading reference LLA...")
-    visualizer = TrajectoryVisualizer()
-    ref_origin = visualizer.load_reference_lla_from_json('input.py')
-    
-    # Load trajectory data
-    print("Loading trajectory data...")
-    trajectories = visualizer.load_trajectories_from_json('input.py')
-    print(f"Loaded {len(trajectories)} trajectories")
-    
-    # Load protected regions
-    print("Loading protected regions...")
-    protected_regions = visualizer.load_protected_regions_from_json('input.py')
-    print(f"Loaded {len(protected_regions)} protected regions")
-    
-    # Load missile data
-    print("Loading missile data...")
-    missiles = visualizer.load_missiles_from_json('input.py')
-    print(f"Loaded {len(missiles)} missiles")
-    
-    # Detect collisions
-    print("Detecting collisions...")
-    collisions = visualizer.detect_collisions()
-    print(f"Detected {len(collisions)} collision events")
-    
-    # Check for satellite imagery
-    satellite_path = None
-    satellite_data_dir = "satellite_data"
-    if os.path.exists(satellite_data_dir):
-        # First look for quick version for faster processing
-        quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
-        if os.path.exists(quick_path):
-            satellite_path = quick_path
-            file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-            print(f"Using quick satellite imagery for faster processing: {satellite_path} ({file_size_mb:.1f}MB)")
-        else:
-            # Fallback to high-resolution files if quick version not available
-            jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
-            if jp2_files:
-                # Use the largest JP2 file (highest resolution)
-                jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
-                satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
-                file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                print(f"Found high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
-            else:
-                # Look for other satellite image formats
-                for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
-                    for file in os.listdir(satellite_data_dir):
-                        if file.lower().endswith(ext):
-                            satellite_path = os.path.join(satellite_data_dir, file)
-                            file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                            print(f"Found satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
-                            break
-                    if satellite_path:
-                        break
-    
-    # Create static visualization
-    print("Creating static visualization...")
-    if satellite_path:
-        print(f"Using satellite imagery: {satellite_path}")
-        visualizer.create_static_visualization('trajectory_static.png', satellite_path)
-    else:
-        print("No satellite imagery found, using elevation colormap")
-        visualizer.create_static_visualization('trajectory_static.png')
-    
-    # Create animation
-    print("Creating animation...")
-    trajectory_meshes = visualizer.create_trajectory_meshes()
-    missile_meshes = visualizer.create_missile_meshes()
-    visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4')
-    
-    # Create interactive visualization with WSLg optimization
-    print("Creating interactive visualization...")
-    if not display_ok:
-        print("⚠️ Display issues detected. Interactive visualization may not work properly.")
-        print("   Consider using one of these alternatives:")
-        print("   1. Run on Windows directly (not WSL)")
-        print("   2. Use WSLg (Windows 11) - update WSL: wsl --update")
-        print("   3. Install and configure VcXsrv or Xming on Windows")
-        print("   4. Use the static visualization and animation files instead")
+    visualizer = None
+    try:
+        print("🚀 Trajectory Visualization Suite")
+        print("=" * 50)
         
-        # Ask user if they want to continue
-        try:
-            response = input("Continue with interactive visualization anyway? (y/N): ").strip().lower()
-            if response != 'y':
-                print("Skipping interactive visualization. Check the generated files:")
-                print("   - trajectory_static.png (static visualization)")
-                print("   - trajectory_animation.mp4 (animation)")
-                return
-        except KeyboardInterrupt:
-            print("\nSkipping interactive visualization.")
-            return
-    
-    # Check if running in WSLg for better messaging
-    is_wslg = False
-    try:
-        with open('/proc/version', 'r') as f:
-            content = f.read().lower()
-            if 'microsoft' in content and 'wslg' in content:
-                is_wslg = True
-    except:
-        pass
-    
-    if is_wslg:
-        print("🎉 WSLg detected - interactive visualization should work well!")
-    
-    try:
+        # Setup WSLg-specific configurations
+        configure_pyvista_for_wslg()
+        display_ok = setup_wslg_display()
+        
+        # Load reference location
+        print("Loading reference LLA...")
+        visualizer = TrajectoryVisualizer()
+        ref_origin = visualizer.load_reference_lla_from_json('input.py')
+        
+        # Load trajectory data
+        print("Loading trajectory data...")
+        trajectories = visualizer.load_trajectories_from_json('input.py')
+        print(f"Loaded {len(trajectories)} trajectories")
+        
+        # Load protected regions
+        print("Loading protected regions...")
+        protected_regions = visualizer.load_protected_regions_from_json('input.py')
+        print(f"Loaded {len(protected_regions)} protected regions")
+        
+        # Load missile data
+        print("Loading missile data...")
+        missiles = visualizer.load_missiles_from_json('input.py')
+        print(f"Loaded {len(missiles)} missiles")
+        
+        # Detect collisions
+        print("Detecting collisions...")
+        collisions = visualizer.detect_collisions()
+        print(f"Detected {len(collisions)} collision events")
+        
+        # Check for satellite imagery
+        satellite_path = None
+        satellite_data_dir = "satellite_data"
+        if os.path.exists(satellite_data_dir):
+            # First look for quick version for faster processing
+            quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
+            if os.path.exists(quick_path):
+                satellite_path = quick_path
+                file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                print(f"Using quick satellite imagery for faster processing: {satellite_path} ({file_size_mb:.1f}MB)")
+            else:
+                # Fallback to high-resolution files if quick version not available
+                jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
+                if jp2_files:
+                    # Use the largest JP2 file (highest resolution)
+                    jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
+                    satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
+                    file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                    print(f"Found high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                else:
+                    # Look for other satellite image formats
+                    for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
+                        for file in os.listdir(satellite_data_dir):
+                            if file.lower().endswith(ext):
+                                satellite_path = os.path.join(satellite_data_dir, file)
+                                file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                                print(f"Found satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                                break
+                        if satellite_path:
+                            break
+        
+        # Create static visualization
+        print("Creating static visualization...")
         if satellite_path:
-            visualizer.create_interactive_visualization(satellite_path)
+            print(f"Using satellite imagery: {satellite_path}")
+            visualizer.create_static_visualization('trajectory_static.png', satellite_path)
         else:
-            visualizer.create_interactive_visualization()
-    except Exception as e:
-        print(f"❌ Interactive visualization failed: {e}")
+            print("No satellite imagery found, using elevation colormap")
+            visualizer.create_static_visualization('trajectory_static.png')
+        
+        # Create animation
+        print("Creating animation...")
+        trajectory_meshes = visualizer.create_trajectory_meshes()
+        missile_meshes = visualizer.create_missile_meshes()
+        visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4')
+        
+        # Create interactive visualization with WSLg optimization
+        print("Creating interactive visualization...")
+        if not display_ok:
+            print("⚠️ Display issues detected. Interactive visualization may not work properly.")
+            print("   Consider using one of these alternatives:")
+            print("   1. Run on Windows directly (not WSL)")
+            print("   2. Update WSL for WSLg support: wsl --update")
+            print("   3. Use the static visualization and animation files instead")
+            
+            # Ask user if they want to continue
+            try:
+                response = input("Continue with interactive visualization anyway? (y/N): ").strip().lower()
+                if response != 'y':
+                    print("Skipping interactive visualization. Check the generated files:")
+                    print("   - trajectory_static.png (static visualization)")
+                    print("   - trajectory_animation.mp4 (animation)")
+                    return
+            except KeyboardInterrupt:
+                print("\nSkipping interactive visualization.")
+                return
+        
+        # Check if running in WSLg for better messaging
+        is_wslg = False
+        try:
+            with open('/proc/version', 'r') as f:
+                content = f.read().lower()
+                if 'microsoft' in content and 'wslg' in content:
+                    is_wslg = True
+        except:
+            pass
+        
         if is_wslg:
-            print("This is unexpected with WSLg. Try updating WSL: wsl --update")
-        else:
-            print("This is common in WSL. The static visualization and animation files should still work.")
-        print("Generated files:")
-        print("   - trajectory_static.png (static visualization)")
-        print("   - trajectory_animation.mp4 (animation)")
-    
-    print("✅ Visualization complete!")
+            print("🎉 WSLg detected - interactive visualization should work well!")
+        
+        try:
+            if satellite_path:
+                visualizer.create_interactive_visualization(satellite_path)
+            else:
+                visualizer.create_interactive_visualization()
+        except Exception as e:
+            print(f"❌ Interactive visualization failed: {e}")
+            if is_wslg:
+                print("This is unexpected with WSLg. Try updating WSL: wsl --update")
+            else:
+                print("This is common in WSL. The static visualization and animation files should still work.")
+            print("Generated files:")
+            print("   - trajectory_static.png (static visualization)")
+            print("   - trajectory_animation.mp4 (animation)")
+        
+        print("✅ Visualization complete!")
+        
+    except KeyboardInterrupt:
+        print("\n🛑 Interrupted by user")
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Clean up resources
+        if visualizer is not None:
+            try:
+                visualizer.close()
+            except:
+                pass
+        print("👋 Cleanup complete")
 
 if __name__ == "__main__":
     main()
