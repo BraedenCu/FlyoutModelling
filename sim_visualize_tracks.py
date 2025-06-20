@@ -96,7 +96,6 @@ def configure_pyvista_for_wsl():
             print("🔧 Configuring PyVista for WSLg (Windows 11)...")
             
             # WSLg provides better graphics support, use more aggressive settings
-            pv.global_theme.renderer = 'opengl2'
             pv.global_theme.window_size = [1280, 720]  # Larger window for WSLg
             pv.global_theme.anti_aliasing = 'msaa'  # Use MSAA for better quality
             pv.global_theme.multi_samples = 4  # Enable multisampling
@@ -108,9 +107,6 @@ def configure_pyvista_for_wsl():
             print("✅ PyVista configured for WSLg with enhanced graphics")
         else:
             print("🔧 Configuring PyVista for WSL (Windows 10)...")
-            
-            # Set PyVista to use software rendering if needed
-            pv.global_theme.renderer = 'opengl2'
             
             # Configure for better WSL compatibility
             pv.global_theme.window_size = [1024, 768]  # Smaller default window
