@@ -1,0 +1,7 @@
+pyvista>=0.43.0
+numpy>=1.21.0
+matplotlib>=3.5.0
+requests>=2.25.0
+vtk>=9.0.0
+rasterio>=1.2.0
+pyproj>=3.0.0 
