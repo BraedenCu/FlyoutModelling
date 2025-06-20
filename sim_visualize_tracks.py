@@ -1023,16 +1023,14 @@ class TrajectoryVisualizer:
                 self.plotter = pv.Plotter(
                     off_screen=off_screen, 
                     window_size=window_size,
-                    lighting='three lights',  # Use standard lighting
-                    multi_samples=4  # Enable multisampling for WSLg
+                    lighting='three lights'  # Use standard lighting
                 )
             else:
                 # Use software rendering for better WSL compatibility
                 self.plotter = pv.Plotter(
                     off_screen=off_screen, 
                     window_size=window_size,
-                    lighting='three lights',  # Use simpler lighting
-                    multi_samples=1  # Reduce multisampling for WSL
+                    lighting='three lights'  # Use simpler lighting
                 )
         else:
             self.plotter = pv.Plotter(off_screen=off_screen, window_size=window_size)
