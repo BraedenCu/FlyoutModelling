@@ -107,6 +107,50 @@ def configure_pyvista_for_wsl():
             
             print("✅ PyVista configured for WSL with compatibility settings")
 
+# WSLg-specific configuration for Windows 11
+def setup_wslg_display():
+    """Configure display settings for Windows 11 WSLg."""
+    # Check if running in WSLg
+    is_wslg = False
+    try:
+        with open('/proc/version', 'r') as f:
+            content = f.read().lower()
+            if 'microsoft' in content and 'wslg' in content:
+                is_wslg = True
+    except:
+        pass
+    
+    if is_wslg:
+        print("🎉 WSLg detected (Windows 11) - native graphics support available!")
+        # WSLg provides native graphics support, no additional configuration needed
+        os.environ['DISPLAY'] = ':0'
+        return True
+    else:
+        print("ℹ️ Not running in WSLg - using standard display configuration")
+        return True
+
+def configure_pyvista_for_wslg():
+    """Configure PyVista settings optimized for Windows 11 WSLg."""
+    # Check if running in WSLg
+    is_wslg = False
+    try:
+        with open('/proc/version', 'r') as f:
+            content = f.read().lower()
+            if 'microsoft' in content and 'wslg' in content:
+                is_wslg = True
+    except:
+        pass
+    
+    if is_wslg:
+        print("🔧 Configuring PyVista for Windows 11 WSLg...")
+        
+        # WSLg provides excellent graphics support - use optimal settings
+        pv.global_theme.window_size = [1280, 720]  # Optimal window size for WSLg
+        
+        print("✅ PyVista configured for Windows 11 WSLg with optimal settings")
+    else:
+        print("ℹ️ Not running in WSLg - using default PyVista settings")
+
 @dataclass
 class TrajectoryPoint:
     """Represents a single point in a trajectory."""
@@ -992,46 +1036,29 @@ class TrajectoryVisualizer:
     
     def setup_visualization(self, window_size: Tuple[int, int] = (1920, 1080), off_screen: bool = False):
         """Setup the main visualization window."""
-        # Check if running in WSL and adjust window size accordingly
-        is_wsl = False
+        # Check if running in WSLg and adjust window size accordingly
         is_wslg = False
         try:
             with open('/proc/version', 'r') as f:
                 content = f.read().lower()
-                if 'microsoft' in content:
-                    is_wsl = True
-                    # Check for WSLg (Windows 11 feature)
-                    if 'wslg' in content:
-                        is_wslg = True
+                if 'microsoft' in content and 'wslg' in content:
+                    is_wslg = True
         except:
             pass
         
-        if is_wsl and not off_screen:
-            if is_wslg:
-                # Use larger window size for WSLg (Windows 11) - better graphics support
-                window_size = (1280, 720)
-                print("🔧 Using WSLg-optimized window size: 1280x720")
-            else:
-                # Use smaller window size for WSL (Windows 10) to avoid display issues
-                window_size = (1024, 768)
-                print("🔧 Using WSL-optimized window size: 1024x768")
+        if is_wslg and not off_screen:
+            # Use optimal window size for WSLg (Windows 11)
+            window_size = (1280, 720)
+            print("🔧 Using WSLg-optimized window size: 1280x720")
         
-        # Create plotter with WSL-friendly settings
-        if is_wsl:
-            if is_wslg:
-                # WSLg provides better graphics support, use enhanced settings
-                self.plotter = pv.Plotter(
-                    off_screen=off_screen, 
-                    window_size=window_size,
-                    lighting='three lights'  # Use standard lighting
-                )
-            else:
-                # Use software rendering for better WSL compatibility
-                self.plotter = pv.Plotter(
-                    off_screen=off_screen, 
-                    window_size=window_size,
-                    lighting='three lights'  # Use simpler lighting
-                )
+        # Create plotter with WSLg-optimized settings
+        if is_wslg:
+            # WSLg provides excellent graphics support
+            self.plotter = pv.Plotter(
+                off_screen=off_screen, 
+                window_size=window_size,
+                lighting='three lights'  # Use standard lighting
+            )
         else:
             self.plotter = pv.Plotter(off_screen=off_screen, window_size=window_size)
         
@@ -1796,25 +1823,9 @@ def main():
     print("🚀 Trajectory Visualization Suite")
     print("=" * 50)
     
-    # Setup WSL-specific configurations
-    configure_pyvista_for_wsl()
-    
-    # Check if running in WSLg for better messaging
-    is_wslg = False
-    try:
-        with open('/proc/version', 'r') as f:
-            content = f.read().lower()
-            if 'microsoft' in content and 'wslg' in content:
-                is_wslg = True
-    except:
-        pass
-    
-    if is_wslg:
-        print("🎉 WSLg detected - native graphics support available!")
-        # WSLg doesn't need X server checks
-        display_ok = True
-    else:
-        display_ok = setup_wsl_display()
+    # Setup WSLg-specific configurations
+    configure_pyvista_for_wslg()
+    display_ok = setup_wslg_display()
     
     # Load reference location
     print("Loading reference LLA...")
@@ -1887,7 +1898,7 @@ def main():
     missile_meshes = visualizer.create_missile_meshes()
     visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4')
     
-    # Create interactive visualization with WSL fallback
+    # Create interactive visualization with WSLg optimization
     print("Creating interactive visualization...")
     if not display_ok:
         print("⚠️ Display issues detected. Interactive visualization may not work properly.")
