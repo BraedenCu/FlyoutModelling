@@ -198,12 +198,53 @@ The visualization uses the ENU (East-North-Up) coordinate system:
    - Use fewer trajectory points
    - Increase system memory
 
-### Performance Tips
+### WSL (Windows Subsystem for Linux) Issues
 
-- Use lower resolution topography for faster rendering
-- Reduce animation frame rate for quicker video generation
-- Close other applications to free up GPU memory
-- Use SSD storage for faster file I/O
+If you're running this visualization in WSL and experiencing display problems, the system includes automatic WSL detection and configuration. However, you may need to set up graphics support:
+
+#### Quick Diagnosis
+
+Run the WSL troubleshooting script:
+```bash
+python wsl_troubleshooting.py
+```
+
+This will check your WSL setup and provide specific solutions.
+
+#### Common WSL Solutions
+
+**For Windows 11 users:**
+1. Enable WSLg (Windows 11 feature):
+   ```bash
+   wsl --update
+   wsl --shutdown
+   ```
+2. Restart your computer
+3. WSLg should provide native graphics support
+
+**For Windows 10 users:**
+1. Install VcXsrv: https://sourceforge.net/projects/vcxsrv/
+2. Configure VcXsrv to allow connections from WSL
+3. Set environment variables in your shell profile (~/.bashrc or ~/.zshrc):
+   ```bash
+   export DISPLAY=:0
+   export LIBGL_ALWAYS_INDIRECT=1
+   export MESA_GL_VERSION_OVERRIDE=3.3
+   ```
+
+**Alternative solutions:**
+- Use the static visualization (`trajectory_static.png`) and animation (`trajectory_animation.mp4`) files
+- Run the script on Windows directly (not WSL)
+- Use WSL2 with GPU passthrough (advanced setup)
+
+#### WSL-Specific Features
+
+The visualization system automatically:
+- Detects WSL environment
+- Adjusts window sizes for WSL compatibility
+- Uses WSL-optimized rendering settings
+- Provides fallback options when display issues are detected
+- Offers interactive prompts to continue or skip problematic visualizations
 
 ## Contributing
 

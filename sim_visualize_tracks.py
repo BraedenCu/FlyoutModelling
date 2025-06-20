@@ -20,9 +20,77 @@ import warnings
 import rasterio
 from rasterio.transform import from_origin
 from pyproj import Proj, Transformer
+import platform
+import subprocess
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore")
+
+# WSL-specific configuration
+def setup_wsl_display():
+    """Configure display settings for WSL compatibility."""
+    # Check if running in WSL
+    is_wsl = False
+    try:
+        with open('/proc/version', 'r') as f:
+            if 'microsoft' in f.read().lower():
+                is_wsl = True
+    except:
+        pass
+    
+    if is_wsl:
+        print("🔧 WSL detected - configuring display settings...")
+        
+        # Set environment variables for WSL graphics
+        os.environ['DISPLAY'] = ':0'
+        os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
+        
+        # Try to start X server if not running
+        try:
+            # Check if X server is running
+            result = subprocess.run(['xset', 'q'], capture_output=True, timeout=5)
+            if result.returncode != 0:
+                print("⚠️ X server not detected. Please ensure you have:")
+                print("   1. VcXsrv, Xming, or similar X server running on Windows")
+                print("   2. DISPLAY=:0 set in your WSL environment")
+                print("   3. WSLg enabled (Windows 11) or X server configured (Windows 10)")
+                return False
+            else:
+                print("✅ X server detected and running")
+                return True
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            print("⚠️ Could not verify X server status")
+            return False
+    
+    return True
+
+def configure_pyvista_for_wsl():
+    """Configure PyVista settings for WSL compatibility."""
+    # Check if running in WSL
+    is_wsl = False
+    try:
+        with open('/proc/version', 'r') as f:
+            if 'microsoft' in f.read().lower():
+                is_wsl = True
+    except:
+        pass
+    
+    if is_wsl:
+        print("🔧 Configuring PyVista for WSL...")
+        
+        # Set PyVista to use software rendering if needed
+        pv.global_theme.renderer = 'opengl2'
+        
+        # Configure for better WSL compatibility
+        pv.global_theme.window_size = [1024, 768]  # Smaller default window
+        pv.global_theme.anti_aliasing = 'fxaa'  # Use FXAA instead of MSAA
+        pv.global_theme.multi_samples = 1  # Reduce multisampling
+        
+        # Set fallback options
+        pv.global_theme.use_panel = False  # Disable panel for WSL
+        pv.global_theme.show_edges = False  # Reduce rendering complexity
+        
+        print("✅ PyVista configured for WSL")
 
 @dataclass
 class TrajectoryPoint:
@@ -909,8 +977,31 @@ class TrajectoryVisualizer:
     
     def setup_visualization(self, window_size: Tuple[int, int] = (1920, 1080), off_screen: bool = False):
         """Setup the main visualization window."""
-        # Create plotter
-        self.plotter = pv.Plotter(off_screen=off_screen, window_size=window_size)
+        # Check if running in WSL and adjust window size accordingly
+        is_wsl = False
+        try:
+            with open('/proc/version', 'r') as f:
+                if 'microsoft' in f.read().lower():
+                    is_wsl = True
+        except:
+            pass
+        
+        if is_wsl and not off_screen:
+            # Use smaller window size for WSL to avoid display issues
+            window_size = (1024, 768)
+            print("🔧 Using WSL-optimized window size: 1024x768")
+        
+        # Create plotter with WSL-friendly settings
+        if is_wsl:
+            # Use software rendering for better WSL compatibility
+            self.plotter = pv.Plotter(
+                off_screen=off_screen, 
+                window_size=window_size,
+                lighting='three lights',  # Use simpler lighting
+                multi_samples=1  # Reduce multisampling for WSL
+            )
+        else:
+            self.plotter = pv.Plotter(off_screen=off_screen, window_size=window_size)
         
         # Set background
         self.plotter.set_background('black')
@@ -1673,6 +1764,10 @@ def main():
     print("🚀 Trajectory Visualization Suite")
     print("=" * 50)
     
+    # Setup WSL-specific configurations
+    configure_pyvista_for_wsl()
+    display_ok = setup_wsl_display()
+    
     # Load reference location
     print("Loading reference LLA...")
     visualizer = TrajectoryVisualizer()
@@ -1733,12 +1828,39 @@ def main():
     missile_meshes = visualizer.create_missile_meshes()
     visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4')
     
-    # Create interactive visualization
+    # Create interactive visualization with WSL fallback
     print("Creating interactive visualization...")
-    if satellite_path:
-        visualizer.create_interactive_visualization(satellite_path)
-    else:
-        visualizer.create_interactive_visualization()
+    if not display_ok:
+        print("⚠️ Display issues detected. Interactive visualization may not work properly.")
+        print("   Consider using one of these alternatives:")
+        print("   1. Run on Windows directly (not WSL)")
+        print("   2. Use WSLg (Windows 11)")
+        print("   3. Install and configure VcXsrv or Xming on Windows")
+        print("   4. Use the static visualization and animation files instead")
+        
+        # Ask user if they want to continue
+        try:
+            response = input("Continue with interactive visualization anyway? (y/N): ").strip().lower()
+            if response != 'y':
+                print("Skipping interactive visualization. Check the generated files:")
+                print("   - trajectory_static.png (static visualization)")
+                print("   - trajectory_animation.mp4 (animation)")
+                return
+        except KeyboardInterrupt:
+            print("\nSkipping interactive visualization.")
+            return
+    
+    try:
+        if satellite_path:
+            visualizer.create_interactive_visualization(satellite_path)
+        else:
+            visualizer.create_interactive_visualization()
+    except Exception as e:
+        print(f"❌ Interactive visualization failed: {e}")
+        print("This is common in WSL. The static visualization and animation files should still work.")
+        print("Generated files:")
+        print("   - trajectory_static.png (static visualization)")
+        print("   - trajectory_animation.mp4 (animation)")
     
     print("✅ Visualization complete!")
 
