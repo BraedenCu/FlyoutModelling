@@ -37,6 +37,15 @@ class Trajectory:
     id: int
     points: List[TrajectoryPoint]
 
+@dataclass
+class ProtectedRegion:
+    """Represents a cylindrical protected region."""
+    id: int
+    centroid: Tuple[float, float, float]  # ENU coordinates (x, y, z)
+    radius: float  # radius in meters
+    height_limit: float  # maximum height in meters
+    name: str  # descriptive name
+
 class TopographyManager:
     """Manages downloading and processing topographic data from OpenTopography."""
     
@@ -174,6 +183,7 @@ class TrajectoryVisualizer:
         self.topography_manager = topography_manager or TopographyManager(ref_origin=ref_origin)
         self.plotter = None
         self.trajectories = []
+        self.protected_regions = []
         self.topography_mesh = None
         self.animation_data = []
         
@@ -198,6 +208,26 @@ class TrajectoryVisualizer:
         
         self.trajectories = trajectories
         return trajectories
+    
+    def load_protected_regions_from_json(self, json_file: str) -> List[ProtectedRegion]:
+        """Load protected region data from JSON file."""
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        
+        protected_regions = []
+        if 'protected_regions' in data:
+            for region_data in data['protected_regions']:
+                region = ProtectedRegion(
+                    id=region_data['id'],
+                    centroid=tuple(region_data['centroid']),
+                    radius=region_data['radius'],
+                    height_limit=region_data['height_limit'],
+                    name=region_data['name']
+                )
+                protected_regions.append(region)
+        
+        self.protected_regions = protected_regions
+        return protected_regions
     
     def calculate_bounds(self) -> Tuple[float, float, float, float]:
         """Calculate the bounding box for all trajectories."""
@@ -308,6 +338,28 @@ class TrajectoryVisualizer:
             }
         
         return trajectory_meshes
+    
+    def create_protected_region_meshes(self) -> Dict[int, pv.PolyData]:
+        """Create PyVista cylindrical meshes for all protected regions."""
+        protected_region_meshes = {}
+        
+        for region in self.protected_regions:
+            # Create cylinder mesh
+            # PyVista cylinder is created along z-axis, so we need to position it correctly
+            cylinder = pv.Cylinder(
+                center=(region.centroid[0], region.centroid[1], region.height_limit / 2),
+                direction=(0, 0, 1),
+                radius=region.radius,
+                height=region.height_limit,
+                resolution=32  # Number of points around circumference
+            )
+            
+            protected_region_meshes[region.id] = {
+                'mesh': cylinder,
+                'region': region
+            }
+        
+        return protected_region_meshes
     
     def setup_visualization(self, window_size: Tuple[int, int] = (1920, 1080), off_screen: bool = False):
         """Setup the main visualization window."""
@@ -420,6 +472,49 @@ class TrajectoryVisualizer:
                     text_color=color
                 )
     
+    def add_protected_regions_to_plot(self, protected_region_meshes: Dict[int, pv.PolyData]):
+        """Add protected region meshes to the visualization."""
+        for region_id, mesh_data in protected_region_meshes.items():
+            region = mesh_data['region']
+            mesh = mesh_data['mesh']
+            
+            # Add cylinder mesh with semi-transparent red color
+            self.plotter.add_mesh(
+                mesh,
+                color='red',
+                opacity=0.3,
+                show_edges=True,
+                edge_color='darkred',
+                line_width=2,
+                lighting=True,
+                ambient=0.4,
+                diffuse=0.6,
+                specular=0.2
+            )
+            
+            # Add label at the top of the cylinder
+            label_pos = (region.centroid[0], region.centroid[1], region.height_limit + 5)
+            self.plotter.add_point_labels(
+                [label_pos],
+                [region.name],
+                font_size=14,
+                bold=True,
+                text_color='red',
+                shape_color='red',
+                shape_opacity=0.7
+            )
+            
+            # Add radius and height info
+            info_text = f"R: {region.radius}m\nH: {region.height_limit}m"
+            info_pos = (region.centroid[0], region.centroid[1], region.height_limit / 2)
+            self.plotter.add_point_labels(
+                [info_pos],
+                [info_text],
+                font_size=10,
+                bold=False,
+                text_color='darkred'
+            )
+    
     def create_animation_data(self, trajectory_meshes: Dict[int, pv.PolyData]):
         """Prepare data for animation."""
         self.animation_data = []
@@ -466,12 +561,24 @@ class TrajectoryVisualizer:
             self.setup_visualization(off_screen=True)
             self.add_topography_to_plot()
             
+            # Create protected region meshes for animation
+            protected_region_meshes = {}
+            if self.protected_regions:
+                protected_region_meshes = self.create_protected_region_meshes()
+            
+            # Calculate optimal camera position to include all elements
+            self._setup_animation_camera()
+            
             for i, frame_data in enumerate(self.animation_data):
                 # Clear previous trajectory meshes
                 self.plotter.clear_actors()
                 
                 # Re-add topography
                 self.add_topography_to_plot()
+                
+                # Add protected regions (static throughout animation)
+                if protected_region_meshes:
+                    self.add_protected_regions_to_plot(protected_region_meshes)
                 
                 # Add coordinate axes
                 self.plotter.add_axes(
@@ -548,6 +655,66 @@ class TrajectoryVisualizer:
                 self._create_video_from_frames(frame_paths, save_path, fps)
                 print(f"Animation saved to: {save_path}")
     
+    def _setup_animation_camera(self):
+        """Setup camera position optimized for animation to include all elements."""
+        # Calculate bounds including trajectories, protected regions, and topography
+        all_points = []
+        
+        # Add trajectory points
+        for trajectory in self.trajectories:
+            for point in trajectory.points:
+                all_points.append(point.position)
+        
+        # Add protected region points (centroids and top points)
+        for region in self.protected_regions:
+            all_points.append(region.centroid)
+            # Add top point of cylinder
+            top_point = (region.centroid[0], region.centroid[1], region.height_limit)
+            all_points.append(top_point)
+            # Add points around the cylinder perimeter at different heights
+            for angle in np.linspace(0, 2*np.pi, 8):
+                x = region.centroid[0] + region.radius * np.cos(angle)
+                y = region.centroid[1] + region.radius * np.sin(angle)
+                all_points.append((x, y, 0))  # Base
+                all_points.append((x, y, region.height_limit))  # Top
+        
+        if all_points:
+            points_array = np.array(all_points)
+            center = points_array.mean(axis=0)
+            
+            # Calculate bounds
+            x_min, y_min, z_min = points_array.min(axis=0)
+            x_max, y_max, z_max = points_array.max(axis=0)
+            
+            # Calculate ranges
+            x_range = x_max - x_min
+            y_range = y_max - y_min
+            z_range = z_max - z_min
+            max_range = max(x_range, y_range, z_range)
+            
+            # Set camera position with extra margin to ensure everything is visible
+            camera_distance = max_range * 2.0  # Increased multiplier for better framing
+            
+            # Position camera at an angle to show 3D perspective
+            camera_pos = (
+                center[0] + camera_distance * 0.7,
+                center[1] + camera_distance * 0.7,
+                center[2] + camera_distance * 0.5
+            )
+            
+            self.plotter.camera_position = [
+                camera_pos,
+                center,
+                (0, 0, 1)  # Up vector
+            ]
+            
+            # Zoom out slightly to ensure everything fits
+            self.plotter.camera.zoom(0.7)
+        else:
+            # Fallback camera position
+            self.plotter.camera_position = 'iso'
+            self.plotter.camera.zoom(1.0)
+    
     def _create_video_from_frames(self, frame_paths: List[str], output_path: str, fps: int):
         """Create video from frame images using ffmpeg."""
         try:
@@ -594,9 +761,18 @@ class TrajectoryVisualizer:
         # Add trajectories
         self.add_trajectories_to_plot(trajectory_meshes)
         
+        # Create and add protected region meshes
+        if self.protected_regions:
+            protected_region_meshes = self.create_protected_region_meshes()
+            self.add_protected_regions_to_plot(protected_region_meshes)
+        
         # Add legend
+        legend_text = "Trajectory Visualization\nRed: Trajectory 1\nBlue: Trajectory 2"
+        if self.protected_regions:
+            legend_text += "\nRed Cylinders: Protected Regions"
+        
         self.plotter.add_text(
-            "Trajectory Visualization\nRed: Trajectory 1\nBlue: Trajectory 2",
+            legend_text,
             position='upper_right',
             font_size=16,
             color='white'
@@ -633,9 +809,18 @@ class TrajectoryVisualizer:
         # Add trajectories
         self.add_trajectories_to_plot(trajectory_meshes)
         
+        # Create and add protected region meshes
+        if self.protected_regions:
+            protected_region_meshes = self.create_protected_region_meshes()
+            self.add_protected_regions_to_plot(protected_region_meshes)
+        
         # Add interactive features
+        interactive_text = "Interactive Trajectory Visualization\nUse mouse to rotate, zoom, and pan"
+        if self.protected_regions:
+            interactive_text += "\nRed cylinders show protected regions"
+        
         self.plotter.add_text(
-            "Interactive Trajectory Visualization\nUse mouse to rotate, zoom, and pan",
+            interactive_text,
             position='upper_left',
             font_size=14,
             color='white'
@@ -656,6 +841,11 @@ def main():
     print("Loading trajectory data...")
     trajectories = visualizer.load_trajectories_from_json('input.py')
     print(f"Loaded {len(trajectories)} trajectories")
+    
+    # Load protected regions
+    print("Loading protected regions...")
+    protected_regions = visualizer.load_protected_regions_from_json('input.py')
+    print(f"Loaded {len(protected_regions)} protected regions")
     
     # Create static visualization
     print("Creating static visualization...")

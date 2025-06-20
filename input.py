@@ -40,5 +40,21 @@
                 }
             ]
         }
+    ],
+    "protected_regions": [
+        {
+            "id": 1,
+            "centroid": [15.0, 15.0, 0.0],
+            "radius": 8.0,
+            "height_limit": 200.0,
+            "name": "Protected Zone Alpha"
+        },
+        {
+            "id": 2,
+            "centroid": [-10.0, 25.0, 0.0],
+            "radius": 12.0,
+            "height_limit": 150.0,
+            "name": "Protected Zone Beta"
+        }
     ]
 }
