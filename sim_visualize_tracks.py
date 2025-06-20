@@ -1045,12 +1045,17 @@ class TrajectoryVisualizer:
             color = missile_colors[i % len(missile_colors)]
             
             # Add missile line as thick tube for better visibility
-            tube = mesh_data['line'].tube(radius=5.0)  # Increased from 0.8 to 5.0
+            tube = mesh_data['line'].tube(radius=15.0)  # Increased from 8.0 to 15.0
             self.plotter.add_mesh(
                 tube,
                 color=color,
-                line_width=14,  # Increased from 5 to 14
-                show_scalar_bar=False
+                line_width=30,  # Increased from 20 to 30
+                show_scalar_bar=False,
+                lighting=True,
+                ambient=0.8,
+                diffuse=0.2,
+                specular=0.5,
+                specular_power=10
             )
             
             # Add velocity vectors
@@ -1071,49 +1076,6 @@ class TrajectoryVisualizer:
                     bold=True,
                     text_color=color
                 )
-    
-    def add_protected_regions_to_plot(self, protected_region_meshes: Dict[int, pv.PolyData]):
-        """Add protected region meshes to the visualization."""
-        for region_id, mesh_data in protected_region_meshes.items():
-            region = mesh_data['region']
-            mesh = mesh_data['mesh']
-            
-            # Add cylinder mesh with semi-transparent red color
-            self.plotter.add_mesh(
-                mesh,
-                color='red',
-                opacity=0.3,
-                show_edges=True,
-                edge_color='darkred',
-                line_width=2,
-                lighting=True,
-                ambient=0.4,
-                diffuse=0.6,
-                specular=0.2
-            )
-            
-            # Add label at the top of the cylinder
-            label_pos = (region.centroid[0], region.centroid[1], region.height_limit + 5)
-            self.plotter.add_point_labels(
-                [label_pos],
-                [region.name],
-                font_size=14,
-                bold=True,
-                text_color='red',
-                shape_color='red',
-                shape_opacity=0.7
-            )
-            
-            # Add radius and height info
-            info_text = f"R: {region.radius}m\nH: {region.height_limit}m"
-            info_pos = (region.centroid[0], region.centroid[1], region.height_limit / 2)
-            self.plotter.add_point_labels(
-                [info_pos],
-                [info_text],
-                font_size=10,
-                bold=False,
-                text_color='darkred'
-            )
     
     def create_animation_data(self, trajectory_meshes: Dict[int, pv.PolyData], 
                             missile_meshes: Dict[int, pv.PolyData] = None):
@@ -1209,43 +1171,50 @@ class TrajectoryVisualizer:
             
             # Use off_screen plotter for animation
             self.setup_visualization(off_screen=True)
+            
+            # Add static elements once (topography, protected regions, collision markers)
+            print("Adding static elements (topography, protected regions, collision markers)...")
             self.add_topography_to_plot()
             
             # Create protected region meshes for animation
             protected_region_meshes = {}
             if self.protected_regions:
                 protected_region_meshes = self.create_protected_region_meshes()
+                self.add_protected_regions_to_plot(protected_region_meshes)
+            
+            # Add collision markers (static throughout animation)
+            self.add_collision_markers_to_plot()
             
             # Calculate optimal camera position to include all elements
             self._setup_animation_camera()
             
+            # Track dynamic actors to clear each frame
+            dynamic_actors = []
+            
             for i, frame_data in enumerate(self.animation_data):
-                # Clear previous trajectory meshes
-                self.plotter.clear_actors()
+                # Clear only dynamic actors from previous frame
+                for actor in dynamic_actors:
+                    self.plotter.remove_actor(actor)
+                dynamic_actors.clear()
                 
-                # Re-add topography
-                self.add_topography_to_plot()
-                
-                # Add protected regions (static throughout animation)
-                if protected_region_meshes:
-                    self.add_protected_regions_to_plot(protected_region_meshes)
-                
-                # Add coordinate axes
-                self.plotter.add_axes(
+                # Add coordinate axes (dynamic - may change each frame)
+                axes_actor = self.plotter.add_axes(
                     xlabel='East (m)', 
                     ylabel='North (m)', 
                     zlabel='Up (m)',
                     line_width=2,
                     labels_off=False
                 )
+                dynamic_actors.append(axes_actor)
                 
-                # Add time display
-                self.plotter.add_text(
+                # Add time display (dynamic - changes each frame)
+                time_actor = self.plotter.add_text(
                     f"Time: {frame_data['time']:.2f}s",
                     position='upper_left',
                     font_size=20,
                     color='white'
                 )
+                dynamic_actors.append(time_actor)
                 
                 # Add active trajectories for this frame
                 for trajectory_info in frame_data['active_trajectories']:
@@ -1260,13 +1229,14 @@ class TrajectoryVisualizer:
                     # Add trajectory points
                     color = ['red', 'blue', 'green', 'yellow', 'cyan', 'magenta', 'orange', 'purple'][trajectory_id % 8]
                     
-                    self.plotter.add_mesh(
+                    trajectory_actor = self.plotter.add_mesh(
                         points,
                         color=color,
                         point_size=15,
                         render_points_as_spheres=True,
                         show_scalar_bar=False
                     )
+                    dynamic_actors.append(trajectory_actor)
                     
                     # Add velocity vectors
                     if len(positions) > 0:
@@ -1289,11 +1259,12 @@ class TrajectoryVisualizer:
                             for vec in velocity_vectors[1:]:
                                 combined_vectors = combined_vectors.merge(vec)
                             
-                            self.plotter.add_mesh(
+                            vector_actor = self.plotter.add_mesh(
                                 combined_vectors,
                                 color=color,
                                 opacity=0.8
                             )
+                            dynamic_actors.append(vector_actor)
                 
                 # Add active missiles for this frame
                 for missile_info in frame_data['active_missiles']:
@@ -1308,13 +1279,14 @@ class TrajectoryVisualizer:
                     # Add missile points
                     color = ['orange', 'purple', 'brown', 'pink', 'cyan', 'lime', 'gold', 'coral'][missile_id % 8]
                     
-                    self.plotter.add_mesh(
+                    missile_actor = self.plotter.add_mesh(
                         points,
                         color=color,
-                        point_size=15,
+                        point_size=40,  # Increased from 25 to 40
                         render_points_as_spheres=True,
                         show_scalar_bar=False
                     )
+                    dynamic_actors.append(missile_actor)
                     
                     # Add velocity vectors
                     if len(positions) > 0:
@@ -1337,11 +1309,12 @@ class TrajectoryVisualizer:
                             for vec in velocity_vectors[1:]:
                                 combined_vectors = combined_vectors.merge(vec)
                             
-                            self.plotter.add_mesh(
+                            vector_actor = self.plotter.add_mesh(
                                 combined_vectors,
                                 color=color,
                                 opacity=0.8
                             )
+                            dynamic_actors.append(vector_actor)
                 
                 # Add explosion effects for this frame
                 for explosion_info in frame_data['explosions']:
@@ -1357,7 +1330,7 @@ class TrajectoryVisualizer:
                     explosion_color = 'yellow' if time_factor > 0.5 else 'orange'
                     explosion_opacity = min(0.9, time_factor * 2)  # Fade out over time
                     
-                    self.plotter.add_mesh(
+                    explosion_actor = self.plotter.add_mesh(
                         explosion_mesh,
                         color=explosion_color,
                         opacity=explosion_opacity,
@@ -1366,14 +1339,37 @@ class TrajectoryVisualizer:
                         ambient=0.8,
                         diffuse=0.2
                     )
+                    dynamic_actors.append(explosion_actor)
+                
+                # Add legend (dynamic - may change each frame)
+                legend_text = f"Animation Frame {i+1}/{len(self.animation_data)}\nRed: Trajectory 1\nBlue: Trajectory 2"
+                if self.missiles:
+                    legend_text += "\nOrange/Purple: Missiles"
+                if self.protected_regions:
+                    legend_text += "\nRed Cylinders: Protected Regions"
+                if self.collision_events:
+                    legend_text += "\nRed X: Collision Points"
+                
+                legend_actor = self.plotter.add_text(
+                    legend_text,
+                    position='upper_right',
+                    font_size=16,
+                    color='white'
+                )
+                dynamic_actors.append(legend_actor)
                 
                 # Save frame
                 frame_path = os.path.join(temp_dir, f"frame_{i:04d}.png")
                 self.plotter.screenshot(frame_path, window_size=(1920, 1080))
                 frame_paths.append(frame_path)
+                
+                # Progress indicator
+                if (i + 1) % 10 == 0 or i == len(self.animation_data) - 1:
+                    print(f"Animation progress: {i+1}/{len(self.animation_data)} frames")
             
             # Create video from frames
             if save_path:
+                print("Creating video from frames...")
                 self._create_video_from_frames(frame_paths, save_path, fps)
                 print(f"Animation saved to: {save_path}")
     
@@ -1498,12 +1494,17 @@ class TrajectoryVisualizer:
             protected_region_meshes = self.create_protected_region_meshes()
             self.add_protected_regions_to_plot(protected_region_meshes)
         
+        # Add collision markers
+        self.add_collision_markers_to_plot()
+        
         # Add legend
         legend_text = "Trajectory Visualization\nRed: Trajectory 1\nBlue: Trajectory 2"
         if self.missiles:
             legend_text += "\nOrange/Purple: Missiles"
         if self.protected_regions:
             legend_text += "\nRed Cylinders: Protected Regions"
+        if self.collision_events:
+            legend_text += "\nRed X: Collision Points"
         if satellite_path:
             legend_text += "\nSatellite imagery overlay enabled"
         
@@ -1555,12 +1556,17 @@ class TrajectoryVisualizer:
             protected_region_meshes = self.create_protected_region_meshes()
             self.add_protected_regions_to_plot(protected_region_meshes)
         
+        # Add collision markers
+        self.add_collision_markers_to_plot()
+        
         # Add interactive features
         interactive_text = "Interactive Trajectory Visualization\nUse mouse to rotate, zoom, and pan"
         if self.missiles:
             interactive_text += "\nOrange/Purple cylinders show missiles"
         if self.protected_regions:
             interactive_text += "\nRed cylinders show protected regions"
+        if self.collision_events:
+            interactive_text += "\nRed X marks show collision points"
         if satellite_path:
             interactive_text += "\nSatellite imagery overlay enabled"
         
@@ -1618,16 +1624,48 @@ class TrajectoryVisualizer:
                 line_width=8,
                 render_lines_as_tubes=True
             )
+
+    def add_protected_regions_to_plot(self, protected_region_meshes: Dict[int, pv.PolyData]):
+        """Add protected region meshes to the visualization."""
+        for region_id, mesh_data in protected_region_meshes.items():
+            region = mesh_data['region']
+            mesh = mesh_data['mesh']
             
-            # Add collision label
+            # Add cylinder mesh with semi-transparent red color
+            self.plotter.add_mesh(
+                mesh,
+                color='red',
+                opacity=0.3,
+                show_edges=True,
+                edge_color='darkred',
+                line_width=2,
+                lighting=True,
+                ambient=0.4,
+                diffuse=0.6,
+                specular=0.2
+            )
+            
+            # Add label at the top of the cylinder
+            label_pos = (region.centroid[0], region.centroid[1], region.height_limit + 5)
             self.plotter.add_point_labels(
-                [pos],
-                [f'Collision {collision.participants}'],
+                [label_pos],
+                [region.name],
                 font_size=14,
                 bold=True,
                 text_color='red',
                 shape_color='red',
-                shape_opacity=0.8
+                shape_opacity=0.7
+            )
+            
+            # Add radius and height info
+            info_text = f"R: {region.radius}m\nH: {region.height_limit}m"
+            info_pos = (region.centroid[0], region.centroid[1], region.height_limit / 2)
+            self.plotter.add_point_labels(
+                [info_pos],
+                [info_text],
+                font_size=10,
+                bold=False,
+                text_color='darkred'
             )
 
 def main():
@@ -1688,6 +1726,12 @@ def main():
     else:
         print("No satellite imagery found, using elevation colormap")
         visualizer.create_static_visualization('trajectory_static.png')
+    
+    # Create animation
+    print("Creating animation...")
+    trajectory_meshes = visualizer.create_trajectory_meshes()
+    missile_meshes = visualizer.create_missile_meshes()
+    visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4')
     
     # Create interactive visualization
     print("Creating interactive visualization...")
