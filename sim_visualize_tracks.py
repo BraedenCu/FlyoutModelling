@@ -46,6 +46,21 @@ class ProtectedRegion:
     height_limit: float  # maximum height in meters
     name: str  # descriptive name
 
+@dataclass
+class Missile:
+    """Represents a missile trajectory."""
+    id: int
+    points: List[TrajectoryPoint]
+
+@dataclass
+class CollisionEvent:
+    """Represents a collision event between trajectories/missiles."""
+    time: float
+    position: Tuple[float, float, float]  # ENU coordinates of collision
+    participants: List[int]  # IDs of colliding objects
+    explosion_duration: float = 2.0  # Duration of explosion animation in seconds
+    explosion_radius: float = 10.0  # Maximum radius of explosion effect
+
 class TopographyManager:
     """Manages downloading and processing topographic data from OpenTopography."""
     
@@ -61,27 +76,40 @@ class TopographyManager:
         
     def _setup_transformers(self):
         lat0, lon0, h0 = self.ref_origin
-        # WGS84 geodetic
-        self.transformer_enu2llh = Transformer.from_crs(
-            f"epsg:4978",
-            f"epsg:4326",
+        # Create ENU projection centered at reference point
+        self.enu_proj = Proj(proj='aeqd', lat_0=lat0, lon_0=lon0, ellps='WGS84')
+        
+        # WGS84 geodetic to ENU local tangent plane
+        self.transformer_llh2enu = Transformer.from_crs(
+            "EPSG:4326",  # WGS84 lat/lon
+            f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +ellps=WGS84",  # Local ENU
             always_xy=True
         )
-        # ENU local tangent plane
-        self.transformer_llh2enu = Transformer.from_crs(
-            f"epsg:4326",
-            f"epsg:4978",
+        
+        # ENU local tangent plane to WGS84 geodetic
+        self.transformer_enu2llh = Transformer.from_crs(
+            f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} +ellps=WGS84",  # Local ENU
+            "EPSG:4326",  # WGS84 lat/lon
             always_xy=True
         )
     
     def enu_to_latlon(self, x, y, z):
-        # Use pyproj for ENU to ECEF to LLH conversion
-        # For small areas, use a simple local tangent plane approximation
-        lat0, lon0, h0 = self.ref_origin
-        # Use pyproj's built-in ENU projection
-        proj_enu = Proj(proj='aeqd', lat_0=lat0, lon_0=lon0, ellps='WGS84')
-        lon, lat = proj_enu(x, y, inverse=True)
+        """Convert ENU coordinates to latitude/longitude."""
+        if self.transformer_enu2llh is None:
+            self._setup_transformers()
+        
+        # Use the transformer to convert ENU to lat/lon
+        lon, lat = self.transformer_enu2llh.transform(x, y)
         return lat, lon
+    
+    def latlon_to_enu(self, lat, lon, alt=0.0):
+        """Convert latitude/longitude to ENU coordinates."""
+        if self.transformer_llh2enu is None:
+            self._setup_transformers()
+        
+        # Use the transformer to convert lat/lon to ENU
+        x, y = self.transformer_llh2enu.transform(lon, lat)
+        return x, y, alt
     
     def get_dem_data(self, bounds: Tuple[float, float, float, float], 
                      resolution: int = 30) -> Optional[np.ndarray]:
@@ -96,12 +124,25 @@ class TopographyManager:
         try:
             # Convert ENU bounds to lat/lon using reference origin
             x_min, x_max, y_min, y_max = bounds
-            lat0, lon0, h0 = self.ref_origin
-            # Four corners
+            
+            # Convert corners to lat/lon
             lat_sw, lon_sw = self.enu_to_latlon(x_min, y_min, 0)
             lat_ne, lon_ne = self.enu_to_latlon(x_max, y_max, 0)
-            south, north = min(lat_sw, lat_ne), max(lat_sw, lat_ne)
-            west, east = min(lon_sw, lon_ne), max(lon_sw, lon_ne)
+            lat_nw, lon_nw = self.enu_to_latlon(x_min, y_max, 0)
+            lat_se, lon_se = self.enu_to_latlon(x_max, y_min, 0)
+            
+            # Find bounding box in lat/lon
+            lats = [lat_sw, lat_ne, lat_nw, lat_se]
+            lons = [lon_sw, lon_ne, lon_nw, lon_se]
+            south, north = min(lats), max(lats)
+            west, east = min(lons), max(lons)
+            
+            # Add small buffer to ensure we get enough data
+            buffer = 0.001  # ~100m buffer
+            south -= buffer
+            north += buffer
+            west -= buffer
+            east += buffer
             
             params = {
                 "demtype": self.dem_type,
@@ -128,18 +169,40 @@ class TopographyManager:
                 Z = np.where(Z == src.nodata, np.nan, Z)
                 transform = src.transform
                 height, width = Z.shape
+                
+                # Create coordinate arrays
                 xs = np.arange(width)
                 ys = np.arange(height)
                 X, Y = np.meshgrid(xs, ys)
                 X, Y = rasterio.transform.xy(transform, Y, X, offset="center")
                 X = np.array(X)
                 Y = np.array(Y)
+                
+                # Ensure X and Y are 2D arrays
+                if X.ndim == 1:
+                    X = X.reshape(height, width)
+                if Y.ndim == 1:
+                    Y = Y.reshape(height, width)
+                
                 # Convert lat/lon grid to ENU meters for visualization
-                proj_enu = Proj(proj='aeqd', lat_0=lat0, lon_0=lon0, ellps='WGS84')
-                X_enu, Y_enu = proj_enu(X, Y)
-                # Ensure arrays are 2D
-                X_enu = np.array(X_enu).reshape(Z.shape)
-                Y_enu = np.array(Y_enu).reshape(Z.shape)
+                # Use the ENU projection directly for better performance
+                X_enu = np.zeros_like(X)
+                Y_enu = np.zeros_like(Y)
+                
+                # Process the transformation more efficiently
+                for i in range(X.shape[0]):
+                    for j in range(X.shape[1]):
+                        try:
+                            x_enu, y_enu = self.transformer_llh2enu.transform(X[i, j], Y[i, j])
+                            X_enu[i, j] = x_enu
+                            Y_enu[i, j] = y_enu
+                        except Exception as e:
+                            # If transformation fails, use fallback
+                            print(f"Coordinate transformation failed at ({i}, {j}): {e}")
+                            # Use simple offset from reference
+                            lat0, lon0, _ = self.ref_origin
+                            X_enu[i, j] = (X[i, j] - lon0) * 111320 * np.cos(np.radians(lat0))
+                            Y_enu[i, j] = (Y[i, j] - lat0) * 111320
             # Remove temp file
             os.remove(tif_path)
             print(f"DEM shape: {Z.shape}, X_enu range: {X_enu.min()}-{X_enu.max()}, Y_enu range: {Y_enu.min()}-{Y_enu.max()}")
@@ -183,7 +246,9 @@ class TrajectoryVisualizer:
         self.topography_manager = topography_manager or TopographyManager(ref_origin=ref_origin)
         self.plotter = None
         self.trajectories = []
+        self.missiles = []
         self.protected_regions = []
+        self.collision_events = []
         self.topography_mesh = None
         self.animation_data = []
         
@@ -229,15 +294,164 @@ class TrajectoryVisualizer:
         self.protected_regions = protected_regions
         return protected_regions
     
-    def calculate_bounds(self) -> Tuple[float, float, float, float]:
-        """Calculate the bounding box for all trajectories."""
-        if not self.trajectories:
-            return (-100, 100, -100, 100)
+    def load_missiles_from_json(self, json_file: str) -> List[Missile]:
+        """Load missile data from JSON file."""
+        with open(json_file, 'r') as f:
+            data = json.load(f)
         
+        missiles = []
+        if 'missile_history' in data:
+            for missile_data in data['missile_history']:
+                points = []
+                for point_data in missile_data['timesteps']:
+                    point = TrajectoryPoint(
+                        time=point_data['time'],
+                        position=tuple(point_data['position']),
+                        velocity=tuple(point_data['velocity'])
+                    )
+                    points.append(point)
+                
+                missile = Missile(id=missile_data['id'], points=points)
+                missiles.append(missile)
+        
+        self.missiles = missiles
+        return missiles
+    
+    def detect_collisions(self, collision_threshold: float = 5.0) -> List[CollisionEvent]:
+        """Detect collisions between trajectories and missiles."""
+        collision_events = []
+        all_objects = []
+        
+        # Collect all trajectory and missile objects
+        for trajectory in self.trajectories:
+            for point in trajectory.points:
+                all_objects.append({
+                    'type': 'trajectory',
+                    'id': trajectory.id,
+                    'time': point.time,
+                    'position': point.position
+                })
+        
+        for missile in self.missiles:
+            for point in missile.points:
+                all_objects.append({
+                    'type': 'missile',
+                    'id': missile.id,
+                    'time': point.time,
+                    'position': point.position
+                })
+        
+        # Sort by time
+        all_objects.sort(key=lambda x: x['time'])
+        
+        # Check for collisions at each time step
+        for i, obj1 in enumerate(all_objects):
+            for j, obj2 in enumerate(all_objects[i+1:], i+1):
+                # Only check objects at the same time
+                if abs(obj1['time'] - obj2['time']) < 0.1:  # Within 0.1 seconds
+                    # Calculate distance between objects
+                    pos1 = np.array(obj1['position'])
+                    pos2 = np.array(obj2['position'])
+                    distance = np.linalg.norm(pos1 - pos2)
+                    
+                    if distance <= collision_threshold:
+                        # Check if this collision is already recorded
+                        collision_exists = False
+                        for event in collision_events:
+                            if (abs(event.time - obj1['time']) < 0.1 and 
+                                event.participants == [obj1['id'], obj2['id']]):
+                                collision_exists = True
+                                break
+                        
+                        if not collision_exists:
+                            # Create collision event
+                            collision_pos = tuple((pos1 + pos2) / 2)  # Midpoint
+                            collision_event = CollisionEvent(
+                                time=obj1['time'],
+                                position=collision_pos,
+                                participants=[obj1['id'], obj2['id']]
+                            )
+                            collision_events.append(collision_event)
+        
+        self.collision_events = collision_events
+        print(f"Detected {len(collision_events)} collision events")
+        return collision_events
+    
+    def create_explosion_mesh(self, position: Tuple[float, float, float], 
+                            radius: float, time_factor: float = 1.0) -> pv.PolyData:
+        """Create an explosion effect mesh."""
+        x, y, z = position
+        
+        # Create a sphere for the explosion
+        sphere = pv.Sphere(center=(x, y, z), radius=radius * time_factor)
+        
+        # Add some random particles for explosion effect
+        n_particles = int(50 * time_factor)
+        if n_particles > 0:
+            particles = []
+            for _ in range(n_particles):
+                # Random direction from explosion center
+                angle_xy = np.random.uniform(0, 2 * np.pi)
+                angle_z = np.random.uniform(0, np.pi)
+                distance = np.random.uniform(0, radius * time_factor)
+                
+                px = x + distance * np.sin(angle_z) * np.cos(angle_xy)
+                py = y + distance * np.sin(angle_z) * np.sin(angle_xy)
+                pz = z + distance * np.cos(angle_z)
+                
+                particles.append([px, py, pz])
+            
+            if particles:
+                particle_mesh = pv.PolyData(particles)
+                # Combine sphere and particles
+                explosion_mesh = sphere.merge(particle_mesh)
+                return explosion_mesh
+        
+        return sphere
+    
+    def load_reference_lla_from_json(self, json_file: str) -> Tuple[float, float, float]:
+        """Load reference latitude, longitude, altitude from JSON file."""
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        
+        if 'reference_lla' in data:
+            ref_data = data['reference_lla']
+            ref_lla = (
+                ref_data['latitude'],
+                ref_data['longitude'], 
+                ref_data['altitude']
+            )
+            self.ref_origin = ref_lla
+            # Update topography manager with new reference
+            if self.topography_manager:
+                self.topography_manager.ref_origin = ref_lla
+                self.topography_manager._setup_transformers()
+            
+            print(f"Loaded reference LLA: {ref_lla}")
+            if 'description' in ref_data:
+                print(f"Reference location: {ref_data['description']}")
+            
+            return ref_lla
+        else:
+            print("No reference_lla found in JSON, using default (0, 0, 0)")
+            return self.ref_origin
+    
+    def calculate_bounds(self) -> Tuple[float, float, float, float]:
+        """Calculate the bounding box for all trajectories and missiles."""
         all_positions = []
+        
+        # Add trajectory positions
         for trajectory in self.trajectories:
             for point in trajectory.points:
                 all_positions.append(point.position)
+        
+        # Add missile positions
+        for missile in self.missiles:
+            for point in missile.points:
+                all_positions.append(point.position)
+        
+        if not all_positions:
+            return (-100, 100, -100, 100)
         
         positions = np.array(all_positions)
         x_min, y_min = positions[:, 0].min(), positions[:, 1].min()
@@ -338,6 +552,59 @@ class TrajectoryVisualizer:
             }
         
         return trajectory_meshes
+    
+    def create_missile_meshes(self) -> Dict[int, pv.PolyData]:
+        """Create PyVista meshes for all missiles."""
+        missile_meshes = {}
+        
+        for missile in self.missiles:
+            if not missile.points:
+                continue
+            
+            # Extract positions and velocities
+            positions = np.array([point.position for point in missile.points])
+            velocities = np.array([point.velocity for point in missile.points])
+            times = np.array([point.time for point in missile.points])
+            
+            # Create line for missile path
+            line = pv.lines_from_points(positions)
+            line.point_data['time'] = times
+            line.point_data['velocity_magnitude'] = np.linalg.norm(velocities, axis=1)
+            
+            # Create velocity vectors - handle each point individually
+            velocity_vectors = []
+            for i, (pos, vel) in enumerate(zip(positions, velocities)):
+                if np.linalg.norm(vel) > 0:  # Only create arrow if velocity is non-zero
+                    # Normalize velocity for direction
+                    vel_norm = vel / np.linalg.norm(vel)
+                    arrow = pv.Arrow(
+                        start=pos,
+                        direction=vel_norm,
+                        scale=2.0,
+                        tip_length=0.3,
+                        tip_radius=0.1,
+                        shaft_radius=0.05
+                    )
+                    velocity_vectors.append(arrow)
+            
+            # Combine all velocity vectors if any exist
+            if velocity_vectors:
+                combined_vectors = velocity_vectors[0]
+                for vec in velocity_vectors[1:]:
+                    combined_vectors = combined_vectors.merge(vec)
+            else:
+                # Create empty mesh if no velocity vectors
+                combined_vectors = pv.PolyData()
+            
+            missile_meshes[missile.id] = {
+                'line': line,
+                'velocity_vectors': combined_vectors,
+                'positions': positions,
+                'velocities': velocities,
+                'times': times
+            }
+        
+        return missile_meshes
     
     def create_protected_region_meshes(self) -> Dict[int, pv.PolyData]:
         """Create PyVista cylindrical meshes for all protected regions."""
@@ -472,6 +739,42 @@ class TrajectoryVisualizer:
                     text_color=color
                 )
     
+    def add_missiles_to_plot(self, missile_meshes: Dict[int, pv.PolyData]):
+        """Add missile meshes to the visualization."""
+        # Color palette for missiles (different from trajectories)
+        missile_colors = ['orange', 'purple', 'brown', 'pink', 'cyan', 'lime', 'gold', 'coral']
+        
+        for i, (missile_id, mesh_data) in enumerate(missile_meshes.items()):
+            color = missile_colors[i % len(missile_colors)]
+            
+            # Add missile line as tube for better visibility
+            tube = mesh_data['line'].tube(radius=0.8)
+            self.plotter.add_mesh(
+                tube,
+                color=color,
+                line_width=5,
+                show_scalar_bar=False
+            )
+            
+            # Add velocity vectors
+            if mesh_data['positions'].shape[0] > 0:
+                self.plotter.add_mesh(
+                    mesh_data['velocity_vectors'],
+                    color=color,
+                    opacity=0.8
+                )
+            
+            # Add missile ID label
+            if mesh_data['positions'].shape[0] > 0:
+                start_pos = mesh_data['positions'][0]
+                self.plotter.add_point_labels(
+                    [start_pos],
+                    [f'Missile {missile_id}'],
+                    font_size=16,
+                    bold=True,
+                    text_color=color
+                )
+    
     def add_protected_regions_to_plot(self, protected_region_meshes: Dict[int, pv.PolyData]):
         """Add protected region meshes to the visualization."""
         for region_id, mesh_data in protected_region_meshes.items():
@@ -515,20 +818,38 @@ class TrajectoryVisualizer:
                 text_color='darkred'
             )
     
-    def create_animation_data(self, trajectory_meshes: Dict[int, pv.PolyData]):
+    def create_animation_data(self, trajectory_meshes: Dict[int, pv.PolyData], 
+                            missile_meshes: Dict[int, pv.PolyData] = None):
         """Prepare data for animation."""
         self.animation_data = []
         
-        # Get all unique timestamps
+        # Get all unique timestamps from trajectories and missiles
         all_times = set()
         for mesh_data in trajectory_meshes.values():
             all_times.update(mesh_data['times'])
         
+        if missile_meshes:
+            for mesh_data in missile_meshes.values():
+                all_times.update(mesh_data['times'])
+        
+        # Add collision event times
+        for event in self.collision_events:
+            all_times.add(event.time)
+            # Add explosion animation times
+            for t in np.arange(event.time, event.time + event.explosion_duration, 0.1):
+                all_times.add(t)
+        
         sorted_times = sorted(all_times)
         
         for time in sorted_times:
-            frame_data = {'time': time, 'active_trajectories': []}
+            frame_data = {
+                'time': time, 
+                'active_trajectories': [], 
+                'active_missiles': [],
+                'explosions': []
+            }
             
+            # Add trajectory data for this time
             for trajectory_id, mesh_data in trajectory_meshes.items():
                 # Find points at this time
                 time_indices = np.where(np.isclose(mesh_data['times'], time))[0]
@@ -543,13 +864,45 @@ class TrajectoryVisualizer:
                         'velocities': velocities
                     })
             
+            # Add missile data for this time
+            if missile_meshes:
+                for missile_id, mesh_data in missile_meshes.items():
+                    # Find points at this time
+                    time_indices = np.where(np.isclose(mesh_data['times'], time))[0]
+                    
+                    if len(time_indices) > 0:
+                        positions = mesh_data['positions'][time_indices]
+                        velocities = mesh_data['velocities'][time_indices]
+                        
+                        frame_data['active_missiles'].append({
+                            'id': missile_id,
+                            'positions': positions,
+                            'velocities': velocities
+                        })
+            
+            # Add explosion effects for this time
+            for event in self.collision_events:
+                if event.time <= time <= event.time + event.explosion_duration:
+                    # Calculate explosion animation factor (0 to 1)
+                    explosion_progress = (time - event.time) / event.explosion_duration
+                    # Use a bell curve for explosion effect (starts small, grows, then fades)
+                    time_factor = 4 * explosion_progress * (1 - explosion_progress)
+                    
+                    frame_data['explosions'].append({
+                        'position': event.position,
+                        'radius': event.explosion_radius,
+                        'time_factor': time_factor,
+                        'participants': event.participants
+                    })
+            
             self.animation_data.append(frame_data)
     
     def animate_trajectories(self, trajectory_meshes: Dict[int, pv.PolyData], 
+                           missile_meshes: Dict[int, pv.PolyData] = None,
                            fps: int = 10, save_path: str = None):
-        """Create an animation of the trajectories."""
+        """Create an animation of the trajectories and missiles."""
         if not self.animation_data:
-            self.create_animation_data(trajectory_meshes)
+            self.create_animation_data(trajectory_meshes, missile_meshes)
         
         print(f"Creating animation with {len(self.animation_data)} frames...")
         
@@ -645,6 +998,78 @@ class TrajectoryVisualizer:
                                 opacity=0.8
                             )
                 
+                # Add active missiles for this frame
+                for missile_info in frame_data['active_missiles']:
+                    missile_id = missile_info['id']
+                    positions = missile_info['positions']
+                    velocities = missile_info['velocities']
+                    
+                    # Create point cloud for current positions
+                    points = pv.PolyData(positions)
+                    points.point_data['velocity_magnitude'] = np.linalg.norm(velocities, axis=1)
+                    
+                    # Add missile points
+                    color = ['orange', 'purple', 'brown', 'pink', 'cyan', 'lime', 'gold', 'coral'][missile_id % 8]
+                    
+                    self.plotter.add_mesh(
+                        points,
+                        color=color,
+                        point_size=15,
+                        render_points_as_spheres=True,
+                        show_scalar_bar=False
+                    )
+                    
+                    # Add velocity vectors
+                    if len(positions) > 0:
+                        velocity_vectors = []
+                        for pos, vel in zip(positions, velocities):
+                            if np.linalg.norm(vel) > 0:
+                                vel_norm = vel / np.linalg.norm(vel)
+                                arrow = pv.Arrow(
+                                    start=pos,
+                                    direction=vel_norm,
+                                    scale=3.0,
+                                    tip_length=0.3,
+                                    tip_radius=0.1,
+                                    shaft_radius=0.05
+                                )
+                                velocity_vectors.append(arrow)
+                        
+                        if velocity_vectors:
+                            combined_vectors = velocity_vectors[0]
+                            for vec in velocity_vectors[1:]:
+                                combined_vectors = combined_vectors.merge(vec)
+                            
+                            self.plotter.add_mesh(
+                                combined_vectors,
+                                color=color,
+                                opacity=0.8
+                            )
+                
+                # Add explosion effects for this frame
+                for explosion_info in frame_data['explosions']:
+                    position = explosion_info['position']
+                    radius = explosion_info['radius']
+                    time_factor = explosion_info['time_factor']
+                    participants = explosion_info['participants']
+                    
+                    # Create explosion mesh
+                    explosion_mesh = self.create_explosion_mesh(position, radius, time_factor)
+                    
+                    # Add explosion to plot with dynamic color and opacity
+                    explosion_color = 'yellow' if time_factor > 0.5 else 'orange'
+                    explosion_opacity = min(0.9, time_factor * 2)  # Fade out over time
+                    
+                    self.plotter.add_mesh(
+                        explosion_mesh,
+                        color=explosion_color,
+                        opacity=explosion_opacity,
+                        show_edges=False,
+                        lighting=True,
+                        ambient=0.8,
+                        diffuse=0.2
+                    )
+                
                 # Save frame
                 frame_path = os.path.join(temp_dir, f"frame_{i:04d}.png")
                 self.plotter.screenshot(frame_path, window_size=(1920, 1080))
@@ -663,6 +1088,11 @@ class TrajectoryVisualizer:
         # Add trajectory points
         for trajectory in self.trajectories:
             for point in trajectory.points:
+                all_points.append(point.position)
+        
+        # Add missile points
+        for missile in self.missiles:
+            for point in missile.points:
                 all_points.append(point.position)
         
         # Add protected region points (centroids and top points)
@@ -761,6 +1191,11 @@ class TrajectoryVisualizer:
         # Add trajectories
         self.add_trajectories_to_plot(trajectory_meshes)
         
+        # Create and add missile meshes
+        if self.missiles:
+            missile_meshes = self.create_missile_meshes()
+            self.add_missiles_to_plot(missile_meshes)
+        
         # Create and add protected region meshes
         if self.protected_regions:
             protected_region_meshes = self.create_protected_region_meshes()
@@ -768,6 +1203,8 @@ class TrajectoryVisualizer:
         
         # Add legend
         legend_text = "Trajectory Visualization\nRed: Trajectory 1\nBlue: Trajectory 2"
+        if self.missiles:
+            legend_text += "\nOrange/Purple: Missiles"
         if self.protected_regions:
             legend_text += "\nRed Cylinders: Protected Regions"
         
@@ -809,6 +1246,11 @@ class TrajectoryVisualizer:
         # Add trajectories
         self.add_trajectories_to_plot(trajectory_meshes)
         
+        # Create and add missile meshes
+        if self.missiles:
+            missile_meshes = self.create_missile_meshes()
+            self.add_missiles_to_plot(missile_meshes)
+        
         # Create and add protected region meshes
         if self.protected_regions:
             protected_region_meshes = self.create_protected_region_meshes()
@@ -816,6 +1258,8 @@ class TrajectoryVisualizer:
         
         # Add interactive features
         interactive_text = "Interactive Trajectory Visualization\nUse mouse to rotate, zoom, and pan"
+        if self.missiles:
+            interactive_text += "\nOrange/Purple cylinders show missiles"
         if self.protected_regions:
             interactive_text += "\nRed cylinders show protected regions"
         
@@ -834,8 +1278,27 @@ def main():
     print("🚀 Trajectory Visualization Suite")
     print("=" * 50)
     
-    # Create visualizer
-    visualizer = TrajectoryVisualizer()
+    # Load reference LLA first
+    print("Loading reference LLA...")
+    with open('input.py', 'r') as f:
+        data = json.load(f)
+    
+    ref_origin = (0.0, 0.0, 0.0)  # Default
+    if 'reference_lla' in data:
+        ref_data = data['reference_lla']
+        ref_origin = (
+            ref_data['latitude'],
+            ref_data['longitude'], 
+            ref_data['altitude']
+        )
+        print(f"Reference LLA: {ref_origin}")
+        if 'description' in ref_data:
+            print(f"Reference location: {ref_data['description']}")
+    else:
+        print("No reference_lla found, using default (0, 0, 0)")
+    
+    # Create visualizer with reference origin
+    visualizer = TrajectoryVisualizer(ref_origin=ref_origin)
     
     # Load trajectories
     print("Loading trajectory data...")
@@ -847,6 +1310,15 @@ def main():
     protected_regions = visualizer.load_protected_regions_from_json('input.py')
     print(f"Loaded {len(protected_regions)} protected regions")
     
+    # Load missiles
+    print("Loading missile data...")
+    missiles = visualizer.load_missiles_from_json('input.py')
+    print(f"Loaded {len(missiles)} missiles")
+    
+    # Detect collisions
+    print("Detecting collisions...")
+    collision_events = visualizer.detect_collisions()
+    
     # Create static visualization
     print("Creating static visualization...")
     visualizer.create_static_visualization('trajectory_static.png')
@@ -854,7 +1326,8 @@ def main():
     # Create animation
     print("Creating animation...")
     trajectory_meshes = visualizer.create_trajectory_meshes()
-    visualizer.animate_trajectories(trajectory_meshes, fps=5, save_path='trajectory_animation.mp4')
+    missile_meshes = visualizer.create_missile_meshes()
+    visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4')
     
     # Create interactive visualization
     print("Creating interactive visualization...")
