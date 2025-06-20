@@ -111,16 +111,109 @@ class TopographyManager:
         x, y = self.transformer_llh2enu.transform(lon, lat)
         return x, y, alt
     
+    def load_local_topography_data(self) -> Optional[tuple]:
+        """
+        Load pre-generated topography data from local files.
+        Returns:
+            (X, Y, Z) meshgrid in ENU meters, or None if failed
+        """
+        try:
+            # Load metadata to get the DEM file path and reference origin
+            metadata_file = "topography_data/topography_metadata.json"
+            if not os.path.exists(metadata_file):
+                print(f"Metadata file not found: {metadata_file}")
+                return None
+            
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Get the DEM file path
+            dem_file = metadata.get("dem_file")
+            if not dem_file or not os.path.exists(dem_file):
+                print(f"DEM file not found: {dem_file}")
+                return None
+            
+            # Update reference origin from metadata if available
+            if "reference_origin" in metadata:
+                ref_data = metadata["reference_origin"]
+                self.ref_origin = (
+                    ref_data["latitude"],
+                    ref_data["longitude"],
+                    ref_data["altitude"]
+                )
+                # Re-setup transformers with new reference origin
+                self._setup_transformers()
+                print(f"Updated reference origin from metadata: {self.ref_origin}")
+            
+            print(f"Loading local topography data from: {dem_file}")
+            
+            # Read DEM with rasterio
+            with rasterio.open(dem_file) as src:
+                Z = src.read(1)
+                Z = np.where(Z == src.nodata, np.nan, Z)
+                transform = src.transform
+                height, width = Z.shape
+                
+                # Create coordinate arrays
+                xs = np.arange(width)
+                ys = np.arange(height)
+                X, Y = np.meshgrid(xs, ys)
+                X, Y = rasterio.transform.xy(transform, Y, X, offset="center")
+                X = np.array(X)
+                Y = np.array(Y)
+                
+                # Ensure X and Y are 2D arrays
+                if X.ndim == 1:
+                    X = X.reshape(height, width)
+                if Y.ndim == 1:
+                    Y = Y.reshape(height, width)
+                
+                # Convert lat/lon grid to ENU meters for visualization
+                X_enu = np.zeros_like(X)
+                Y_enu = np.zeros_like(Y)
+                
+                # Process the transformation more efficiently
+                for i in range(X.shape[0]):
+                    for j in range(X.shape[1]):
+                        try:
+                            x_enu, y_enu = self.transformer_llh2enu.transform(X[i, j], Y[i, j])
+                            X_enu[i, j] = x_enu
+                            Y_enu[i, j] = y_enu
+                        except Exception as e:
+                            # If transformation fails, use fallback
+                            print(f"Coordinate transformation failed at ({i}, {j}): {e}")
+                            # Use simple offset from reference
+                            lat0, lon0, _ = self.ref_origin
+                            X_enu[i, j] = (X[i, j] - lon0) * 111320 * np.cos(np.radians(lat0))
+                            Y_enu[i, j] = (Y[i, j] - lat0) * 111320
+            
+            print(f"Local DEM shape: {Z.shape}, X_enu range: {X_enu.min()}-{X_enu.max()}, Y_enu range: {Y_enu.min()}-{Y_enu.max()}")
+            print(f"Array shapes - X: {X_enu.shape}, Y: {Y_enu.shape}, Z: {Z.shape}")
+            return X_enu, Y_enu, Z
+            
+        except Exception as e:
+            print(f"Error loading local topography data: {e}")
+            return None
+    
     def get_dem_data(self, bounds: Tuple[float, float, float, float], 
                      resolution: int = 30) -> Optional[np.ndarray]:
         """
-        Download DEM data from OpenTopography for the specified bounds.
+        Get DEM data - first tries local data, then falls back to API download.
         Args:
             bounds: (x_min, x_max, y_min, y_max) in ENU meters
             resolution: DEM resolution in meters (30, 10, 3, 1)
         Returns:
             (X, Y, Z) meshgrid in ENU meters, or None if failed
         """
+        # First try to load local topography data
+        local_data = self.load_local_topography_data()
+        if local_data is not None:
+            print("✅ Successfully loaded local topography data")
+            return local_data
+        
+        print("Local topography data not available, falling back to API download...")
+        
+        # Fallback to original API download method
         try:
             # Convert ENU bounds to lat/lon using reference origin
             x_min, x_max, y_min, y_max = bounds
@@ -711,12 +804,12 @@ class TrajectoryVisualizer:
         for i, (trajectory_id, mesh_data) in enumerate(trajectory_meshes.items()):
             color = colors[i % len(colors)]
             
-            # Add trajectory line as tube for better visibility
-            tube = mesh_data['line'].tube(radius=0.5)
+            # Add trajectory line as thick tube for better visibility
+            tube = mesh_data['line'].tube(radius=3.0)  # Increased from 0.5 to 3.0
             self.plotter.add_mesh(
                 tube,
                 color=color,
-                line_width=4,
+                line_width=10,  # Increased from 4 to 10
                 show_scalar_bar=False
             )
             
@@ -747,12 +840,12 @@ class TrajectoryVisualizer:
         for i, (missile_id, mesh_data) in enumerate(missile_meshes.items()):
             color = missile_colors[i % len(missile_colors)]
             
-            # Add missile line as tube for better visibility
-            tube = mesh_data['line'].tube(radius=0.8)
+            # Add missile line as thick tube for better visibility
+            tube = mesh_data['line'].tube(radius=5.0)  # Increased from 0.8 to 5.0
             self.plotter.add_mesh(
                 tube,
                 color=color,
-                line_width=5,
+                line_width=14,  # Increased from 5 to 14
                 show_scalar_bar=False
             )
             

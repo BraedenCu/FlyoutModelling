@@ -1,9 +1,9 @@
 {
     "reference_lla": {
-        "latitude": 37.7749,
-        "longitude": -122.4194,
+        "latitude": 32.9203654,
+        "longitude": -113.9303655,
         "altitude": 0.0,
-        "description": "San Francisco, CA reference point"
+        "description": "Arizona reference point (matches topography data)"
     },
     "track_history": [
         {
@@ -11,18 +11,18 @@
             "timesteps": [
                 {
                     "time": 0.0,
-                    "position": [0.0, 0.0, 100.0],
-                    "velocity": [10.0, 5.0, -2.0]
+                    "position": [0.0, 0.0, 1000.0],
+                    "velocity": [100.0, 50.0, -20.0]
                 },
                 {
-                    "time": 1.0,
-                    "position": [10.0, 5.0, 98.0],
-                    "velocity": [12.0, 4.0, -1.5]
+                    "time": 10.0,
+                    "position": [1000.0, 500.0, 800.0],
+                    "velocity": [120.0, 40.0, -15.0]
                 },
                 {
-                    "time": 2.0,
-                    "position": [22.0, 9.0, 96.5],
-                    "velocity": [15.0, 3.0, -1.0]
+                    "time": 20.0,
+                    "position": [2200.0, 900.0, 650.0],
+                    "velocity": [150.0, 30.0, -10.0]
                 }
             ]
         },
@@ -30,19 +30,19 @@
             "id": 2,
             "timesteps": [
                 {
-                    "time": 0.5,
-                    "position": [5.0, 10.0, 150.0],
-                    "velocity": [8.0, 12.0, -3.0]
+                    "time": 5.0,
+                    "position": [500.0, 1000.0, 1500.0],
+                    "velocity": [80.0, 120.0, -30.0]
                 },
                 {
-                    "time": 1.5,
-                    "position": [13.0, 22.0, 147.0],
-                    "velocity": [10.0, 11.0, -2.5]
+                    "time": 15.0,
+                    "position": [1300.0, 2200.0, 1200.0],
+                    "velocity": [100.0, 110.0, -25.0]
                 },
                 {
-                    "time": 2.5,
-                    "position": [23.0, 33.0, 144.5],
-                    "velocity": [12.0, 10.0, -2.0]
+                    "time": 25.0,
+                    "position": [2300.0, 3300.0, 950.0],
+                    "velocity": [120.0, 100.0, -20.0]
                 }
             ]
         }
@@ -50,16 +50,16 @@
     "protected_regions": [
         {
             "id": 1,
-            "centroid": [15.0, 15.0, 0.0],
-            "radius": 8.0,
-            "height_limit": 200.0,
+            "centroid": [1500.0, 1500.0, 0.0],
+            "radius": 800.0,
+            "height_limit": 2000.0,
             "name": "Protected Zone Alpha"
         },
         {
             "id": 2,
-            "centroid": [-10.0, 25.0, 0.0],
-            "radius": 12.0,
-            "height_limit": 150.0,
+            "centroid": [-1000.0, 2500.0, 0.0],
+            "radius": 1200.0,
+            "height_limit": 1500.0,
             "name": "Protected Zone Beta"
         }
     ],
@@ -69,18 +69,18 @@
             "timesteps": [
                 {
                     "time": 0.0,
-                    "position": [0.0, 0.0, 100.0],
-                    "velocity": [10.0, 5.0, -2.0]
+                    "position": [0.0, 0.0, 1000.0],
+                    "velocity": [100.0, 50.0, -20.0]
                 },
                 {
-                    "time": 1.0,
-                    "position": [10.0, 5.0, 98.0],
-                    "velocity": [12.0, 4.0, -1.5]
+                    "time": 10.0,
+                    "position": [1000.0, 500.0, 800.0],
+                    "velocity": [120.0, 40.0, -15.0]
                 },
                 {
-                    "time": 2.0,
-                    "position": [22.0, 9.0, 96.5],
-                    "velocity": [15.0, 3.0, -1.0]
+                    "time": 20.0,
+                    "position": [2200.0, 900.0, 650.0],
+                    "velocity": [150.0, 30.0, -10.0]
                 }
             ]
         },
@@ -88,19 +88,19 @@
             "id": 2,
             "timesteps": [
                 {
-                    "time": 0.5,
-                    "position": [5.0, 10.0, 150.0],
-                    "velocity": [8.0, 12.0, -3.0]
+                    "time": 5.0,
+                    "position": [500.0, 1000.0, 1500.0],
+                    "velocity": [80.0, 120.0, -30.0]
                 },
                 {
-                    "time": 1.5,
-                    "position": [13.0, 22.0, 147.0],
-                    "velocity": [10.0, 11.0, -2.5]
+                    "time": 15.0,
+                    "position": [1300.0, 2200.0, 1200.0],
+                    "velocity": [100.0, 110.0, -25.0]
                 },
                 {
-                    "time": 2.5,
-                    "position": [23.0, 33.0, 144.5],
-                    "velocity": [12.0, 10.0, -2.0]
+                    "time": 25.0,
+                    "position": [2300.0, 3300.0, 950.0],
+                    "velocity": [120.0, 100.0, -20.0]
                 }
             ]
         }

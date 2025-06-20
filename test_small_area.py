@@ -11,8 +11,8 @@ def test_real_world():
     print("🧪 Testing Trajectory Visualization Suite - Real World Coordinates")
     print("=" * 70)
     
-    # San Francisco reference origin (lat, lon, height)
-    ref_origin = (37.7749, -122.4194, 0.0)
+    # Arizona reference origin (lat, lon, height) - matches topography data
+    ref_origin = (32.9203654, -113.9303655, 0.0)
     
     # Create trajectory data spanning several kilometers (ENU meters)
     real_world_data = {
@@ -22,18 +22,18 @@ def test_real_world():
                 "timesteps": [
                     {
                         "time": 0.0,
-                        "position": [0.0, 0.0, 100.0],
-                        "velocity": [50.0, 25.0, -5.0]
+                        "position": [0.0, 0.0, 1000.0],
+                        "velocity": [100.0, 50.0, -20.0]
                     },
                     {
                         "time": 10.0,
-                        "position": [500.0, 250.0, 50.0],
-                        "velocity": [60.0, 20.0, -3.0]
+                        "position": [1000.0, 500.0, 800.0],
+                        "velocity": [120.0, 40.0, -15.0]
                     },
                     {
                         "time": 20.0,
-                        "position": [1100.0, 450.0, 20.0],
-                        "velocity": [70.0, 15.0, -2.0]
+                        "position": [2200.0, 900.0, 650.0],
+                        "velocity": [150.0, 30.0, -10.0]
                     }
                 ]
             },
@@ -42,18 +42,18 @@ def test_real_world():
                 "timesteps": [
                     {
                         "time": 5.0,
-                        "position": [200.0, 400.0, 150.0],
-                        "velocity": [40.0, 60.0, -8.0]
+                        "position": [500.0, 1000.0, 1500.0],
+                        "velocity": [80.0, 120.0, -30.0]
                     },
                     {
                         "time": 15.0,
-                        "position": [600.0, 1000.0, 120.0],
-                        "velocity": [50.0, 55.0, -6.0]
+                        "position": [1300.0, 2200.0, 1200.0],
+                        "velocity": [100.0, 110.0, -25.0]
                     },
                     {
                         "time": 25.0,
-                        "position": [1100.0, 1550.0, 90.0],
-                        "velocity": [60.0, 50.0, -4.0]
+                        "position": [2300.0, 3300.0, 950.0],
+                        "velocity": [120.0, 100.0, -20.0]
                     }
                 ]
             }
