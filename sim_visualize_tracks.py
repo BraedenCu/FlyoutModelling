@@ -604,12 +604,21 @@ class TopographyManager:
 class TrajectoryVisualizer:
     """Main visualization class for trajectory display."""
     
-    def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0), visualization_mode='auto', topology_offset: float = 300.0):
-        """Initialize the trajectory visualizer."""
+    def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0), visualization_mode='auto', topology_offset: float = 300.0, scale_factor: float = 1.0):
+        """Initialize the trajectory visualizer.
+        
+        Args:
+            topography_manager: Optional topography manager for terrain data
+            ref_origin: Reference origin point (lat, lon, alt)
+            visualization_mode: 'satellite', 'topography', or 'auto'
+            topology_offset: Offset for terrain positioning
+            scale_factor: Factor to scale all positions and velocities (default: 1.0, higher values = smaller scale)
+        """
         self.topography_manager = topography_manager or TopographyManager(ref_origin=ref_origin)
         self.ref_origin = ref_origin
         self.visualization_mode = visualization_mode
         self.topology_offset = topology_offset
+        self.scale_factor = scale_factor
         
         # Data storage
         self.trajectories = []
@@ -627,6 +636,39 @@ class TrajectoryVisualizer:
         
         # Register cleanup
         register_cleanup()
+    
+    def _apply_scale_factor(self, position: Tuple[float, float, float], velocity: Tuple[float, float, float] = None) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+        """Apply scale factor to position and velocity.
+        
+        Args:
+            position: Original position (x, y, z)
+            velocity: Original velocity (vx, vy, vz) - optional
+            
+        Returns:
+            Tuple of (scaled_position, scaled_velocity)
+        """
+        scaled_position = tuple(p / self.scale_factor for p in position)
+        
+        if velocity is not None:
+            scaled_velocity = tuple(v / self.scale_factor for v in velocity)
+        else:
+            scaled_velocity = None
+            
+        return scaled_position, scaled_velocity
+    
+    def _get_scaled_visual_params(self, base_radius: float = 1.0, base_line_width: float = 1.0) -> Tuple[float, float]:
+        """Get scaled visual parameters for consistent sizing.
+        
+        Args:
+            base_radius: Base radius for tubes/spheres
+            base_line_width: Base line width
+            
+        Returns:
+            Tuple of (scaled_radius, scaled_line_width)
+        """
+        scaled_radius = base_radius / self.scale_factor
+        scaled_line_width = base_line_width / self.scale_factor
+        return scaled_radius, scaled_line_width
     
     def close(self):
         """Close the visualizer and clean up resources."""
@@ -654,10 +696,16 @@ class TrajectoryVisualizer:
         for track_data in data['track_history']:
             points = []
             for point_data in track_data['timesteps']:
+                # Apply scale factor to position and velocity
+                scaled_position, scaled_velocity = self._apply_scale_factor(
+                    tuple(point_data['position']), 
+                    tuple(point_data['velocity'])
+                )
+                
                 point = TrajectoryPoint(
                     time=point_data['time'],
-                    position=tuple(point_data['position']),
-                    velocity=tuple(point_data['velocity'])
+                    position=scaled_position,
+                    velocity=scaled_velocity
                 )
                 points.append(point)
             
@@ -675,11 +723,16 @@ class TrajectoryVisualizer:
         protected_regions = []
         if 'protected_regions' in data:
             for region_data in data['protected_regions']:
+                # Apply scale factor to centroid, radius, and height limit
+                scaled_centroid, _ = self._apply_scale_factor(tuple(region_data['centroid']))
+                scaled_radius = region_data['radius'] / self.scale_factor
+                scaled_height_limit = region_data['height_limit'] / self.scale_factor
+                
                 region = ProtectedRegion(
                     id=region_data['id'],
-                    centroid=tuple(region_data['centroid']),
-                    radius=region_data['radius'],
-                    height_limit=region_data['height_limit'],
+                    centroid=scaled_centroid,
+                    radius=scaled_radius,
+                    height_limit=scaled_height_limit,
                     name=region_data['name']
                 )
                 protected_regions.append(region)
@@ -701,10 +754,16 @@ class TrajectoryVisualizer:
                 points = []
                 
                 for timestep in missile_data['timesteps']:
+                    # Apply scale factor to position and velocity
+                    scaled_position, scaled_velocity = self._apply_scale_factor(
+                        tuple(timestep['position']), 
+                        tuple(timestep['velocity'])
+                    )
+                    
                     point = TrajectoryPoint(
                         time=timestep['time'],
-                        position=tuple(timestep['position']),
-                        velocity=tuple(timestep['velocity'])
+                        position=scaled_position,
+                        velocity=scaled_velocity
                     )
                     points.append(point)
                 
@@ -731,9 +790,12 @@ class TrajectoryVisualizer:
             
             for resource_data in resources:
                 if resource_data.get('type') == 'radar':
+                    # Apply scale factor to emplacement position
+                    scaled_emplacement, _ = self._apply_scale_factor(tuple(resource_data['emplacement']))
+                    
                     radar = Radar(
                         id=resource_data['id'],
-                        emplacement=tuple(resource_data['emplacement']),
+                        emplacement=scaled_emplacement,
                         type=resource_data['type'],
                         description=resource_data['description']
                     )
@@ -750,6 +812,9 @@ class TrajectoryVisualizer:
     
     def detect_collisions(self, collision_threshold: float = 5.0) -> List[CollisionEvent]:
         """Detect collisions between trajectories and missiles."""
+        # Scale the collision threshold
+        scaled_threshold = collision_threshold / self.scale_factor
+        
         collision_events = []
         all_objects = []
         
@@ -785,7 +850,7 @@ class TrajectoryVisualizer:
                     pos2 = np.array(obj2['position'])
                     distance = np.linalg.norm(pos1 - pos2)
                     
-                    if distance <= collision_threshold:
+                    if distance <= scaled_threshold:
                         # Check if this collision is already recorded
                         collision_exists = False
                         for event in collision_events:
@@ -1299,17 +1364,27 @@ class TrajectoryVisualizer:
     
     def add_trajectories_to_plot(self, trajectory_meshes: Dict[int, pv.PolyData]):
         """Add trajectory meshes to the visualization."""
-        # Use blue color for all trajectories
-        color = 'blue'
+        # Color palette for trajectories (different from missiles)
+        trajectory_colors = ['blue', 'cyan', 'lightblue', 'navy', 'skyblue', 'steelblue', 'royalblue', 'cornflowerblue']
         
-        for trajectory_id, mesh_data in trajectory_meshes.items():
-            # Add trajectory line as thick tube for better visibility (same size as missiles)
-            tube = mesh_data['line'].tube(radius=15.0)  # Same as missiles
+        for i, (trajectory_id, mesh_data) in enumerate(trajectory_meshes.items()):
+            color = trajectory_colors[i % len(trajectory_colors)]
+            
+            # Get scaled visual parameters
+            scaled_radius, scaled_line_width = self._get_scaled_visual_params(base_radius=15.0, base_line_width=30.0)
+            
+            # Add trajectory line as thick tube for better visibility
+            tube = mesh_data['line'].tube(radius=scaled_radius)
             self.plotter.add_mesh(
                 tube,
                 color=color,
-                line_width=30,  # Same as missiles
-                show_scalar_bar=False
+                line_width=scaled_line_width,
+                show_scalar_bar=False,
+                lighting=True,
+                ambient=0.8,
+                diffuse=0.2,
+                specular=0.5,
+                specular_power=10
             )
             
             # Add velocity vectors
@@ -1339,12 +1414,15 @@ class TrajectoryVisualizer:
         missile_color = 'yellow'
         
         for i, (missile_id, mesh_data) in enumerate(missile_meshes.items()):
+            # Get scaled visual parameters
+            scaled_radius, scaled_line_width = self._get_scaled_visual_params(base_radius=15.0, base_line_width=30.0)
+            
             # Add missile line as thick tube for better visibility
-            tube = mesh_data['line'].tube(radius=15.0)  # Increased from 8.0 to 15.0
+            tube = mesh_data['line'].tube(radius=scaled_radius)
             self.plotter.add_mesh(
                 tube,
                 color=missile_color,
-                line_width=30,  # Increased from 20 to 30
+                line_width=scaled_line_width,
                 show_scalar_bar=False,
                 lighting=True,
                 ambient=0.8,
@@ -1618,11 +1696,14 @@ class TrajectoryVisualizer:
                 dynamic_actors.clear()
                 
                 # Add coordinate axes (dynamic - may change each frame)
+                # Get scaled line width for axes
+                _, scaled_line_width = self._get_scaled_visual_params(base_line_width=2.0)
+                
                 axes_actor = self.plotter.add_axes(
                     xlabel='East (m)', 
                     ylabel='North (m)', 
                     zlabel='Up (m)',
-                    line_width=2,
+                    line_width=scaled_line_width,
                     labels_off=False
                 )
                 dynamic_actors.append(axes_actor)
@@ -1661,11 +1742,14 @@ class TrajectoryVisualizer:
                         trail_points = np.array(trail_positions)
                         trail_line = pv.lines_from_points(trail_points)
                         
+                        # Get scaled line width for trails
+                        _, scaled_line_width = self._get_scaled_visual_params(base_line_width=8.0)
+                        
                         # Add trail with fading opacity
                         trail_actor = self.plotter.add_mesh(
                             trail_line,
                             color=color,
-                            line_width=8,  # Same as missiles
+                            line_width=scaled_line_width,
                             opacity=0.8,
                             render_lines_as_tubes=True
                         )
@@ -1674,10 +1758,12 @@ class TrajectoryVisualizer:
                     # Add velocity vector (arrow head) for current position
                     if np.linalg.norm(current_velocity) > 0:
                         vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                        # Scale arrow size
+                        arrow_scale = 12.0 / self.scale_factor
                         arrow = pv.Arrow(
                             start=current_position,
                             direction=vel_norm,
-                            scale=12.0,  # Same as missiles
+                            scale=arrow_scale,
                             tip_length=0.4,
                             tip_radius=0.3,
                             shaft_radius=0.15
@@ -1705,11 +1791,14 @@ class TrajectoryVisualizer:
                         trail_points = np.array(trail_positions)
                         trail_line = pv.lines_from_points(trail_points)
                         
-                        # Add missile trail with fading opacity
+                        # Get scaled line width for trails
+                        _, scaled_line_width = self._get_scaled_visual_params(base_line_width=8.0)
+                        
+                        # Add trail with fading opacity
                         trail_actor = self.plotter.add_mesh(
                             trail_line,
                             color=color,
-                            line_width=8,
+                            line_width=scaled_line_width,
                             opacity=0.8,
                             render_lines_as_tubes=True
                         )
@@ -1718,10 +1807,12 @@ class TrajectoryVisualizer:
                     # Add velocity vector (arrow head) for current missile position
                     if np.linalg.norm(current_velocity) > 0:
                         vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                        # Scale arrow size
+                        arrow_scale = 12.0 / self.scale_factor
                         arrow = pv.Arrow(
                             start=current_position,
                             direction=vel_norm,
-                            scale=12.0,  # Same as trajectories
+                            scale=arrow_scale,
                             tip_length=0.4,
                             tip_radius=0.3,
                             shaft_radius=0.15
@@ -1737,7 +1828,7 @@ class TrajectoryVisualizer:
                 # Add explosion effects for this frame
                 for explosion_info in frame_data['explosions']:
                     position = explosion_info['position']
-                    radius = explosion_info['radius']
+                    radius = explosion_info['radius'] / self.scale_factor  # Scale explosion radius
                     time_factor = explosion_info['time_factor']
                     participants = explosion_info['participants']
                     
@@ -1786,10 +1877,12 @@ class TrajectoryVisualizer:
                         
                         if np.linalg.norm(current_velocity) > 0:
                             vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                            # Scale arrow size
+                            arrow_scale = 40.0 / self.scale_factor
                             arrow = pv.Arrow(
                                 start=current_position,
                                 direction=vel_norm,
-                                scale=40.0,  # Much larger arrow for end position
+                                scale=arrow_scale,
                                 tip_length=0.4,
                                 tip_radius=0.5,
                                 shaft_radius=0.25
@@ -1821,10 +1914,12 @@ class TrajectoryVisualizer:
                             
                             if np.linalg.norm(end_velocity) > 0:
                                 vel_norm = end_velocity / np.linalg.norm(end_velocity)
+                                # Scale arrow size
+                                arrow_scale = 50.0 / self.scale_factor
                                 arrow = pv.Arrow(
                                     start=end_position,
                                     direction=vel_norm,
-                                    scale=50.0,  # Much larger arrow for missile end position
+                                    scale=arrow_scale,
                                     tip_length=0.4,
                                     tip_radius=0.6,
                                     shaft_radius=0.3
@@ -2146,10 +2241,14 @@ class TrajectoryVisualizer:
         if not self.collision_events:
             return
         
+        # Get scaled visual parameters for collision markers
+        _, scaled_line_width = self._get_scaled_visual_params(base_line_width=8.0)
+        scaled_size = 50.0 / self.scale_factor  # Scale the X symbol size
+        
         for collision in self.collision_events:
             # Create an X symbol at the collision point
             pos = collision.position
-            size = 50  # Size of the X symbol
+            size = scaled_size
             
             # Create two perpendicular lines to form an X
             # Line 1: diagonal from top-left to bottom-right
@@ -2176,13 +2275,13 @@ class TrajectoryVisualizer:
             self.plotter.add_mesh(
                 line1,
                 color='red',
-                line_width=8,
+                line_width=scaled_line_width,
                 render_lines_as_tubes=True
             )
             self.plotter.add_mesh(
                 line2,
                 color='red',
-                line_width=8,
+                line_width=scaled_line_width,
                 render_lines_as_tubes=True
             )
 
@@ -2192,6 +2291,9 @@ class TrajectoryVisualizer:
             region = mesh_data['region']
             mesh = mesh_data['mesh']
             
+            # Get scaled line width for edges
+            _, scaled_line_width = self._get_scaled_visual_params(base_line_width=2.0)
+            
             # Add cylinder mesh with semi-transparent red color
             self.plotter.add_mesh(
                 mesh,
@@ -2199,7 +2301,7 @@ class TrajectoryVisualizer:
                 opacity=0.6,  # Increased from 0.3 to 0.6 (30% more opaque)
                 show_edges=True,
                 edge_color='darkred',
-                line_width=2,
+                line_width=scaled_line_width,
                 lighting=True,
                 ambient=0.4,
                 diffuse=0.6,
@@ -2240,10 +2342,12 @@ class TrajectoryVisualizer:
                 # Create arrow pointing in the direction of final velocity
                 if np.linalg.norm(end_velocity) > 0:
                     vel_norm = end_velocity / np.linalg.norm(end_velocity)
+                    # Scale arrow size
+                    arrow_scale = 40.0 / self.scale_factor
                     arrow = pv.Arrow(
                         start=end_position,
                         direction=vel_norm,
-                        scale=40.0,  # Much larger arrow for end position
+                        scale=arrow_scale,
                         tip_length=0.4,
                         tip_radius=0.5,
                         shaft_radius=0.25
@@ -2280,10 +2384,12 @@ class TrajectoryVisualizer:
                     # Create arrow pointing in the direction of final velocity
                     if np.linalg.norm(end_velocity) > 0:
                         vel_norm = end_velocity / np.linalg.norm(end_velocity)
+                        # Scale arrow size
+                        arrow_scale = 50.0 / self.scale_factor
                         arrow = pv.Arrow(
                             start=end_position,
                             direction=vel_norm,
-                            scale=50.0,  # Much larger arrow for missile end position
+                            scale=arrow_scale,
                             tip_length=0.4,
                             tip_radius=0.6,
                             shaft_radius=0.3
@@ -2316,10 +2422,13 @@ class TrajectoryVisualizer:
             return
         
         for radar in self.radars:
+            # Get scaled radius for radar representation
+            scaled_radius, _ = self._get_scaled_visual_params(base_radius=20.0)
+            
             # Create a small sphere to represent the radar station
             radar_sphere = pv.Sphere(
                 center=radar.emplacement,
-                radius=20.0  # Small radius for radar representation
+                radius=scaled_radius
             )
             
             # Add radar sphere to plot
@@ -2459,11 +2568,14 @@ class TrajectoryVisualizer:
                 dynamic_actors.clear()
                 
                 # Add coordinate axes for top-down view (only X and Y axes visible)
+                # Get scaled line width for axes
+                _, scaled_line_width = self._get_scaled_visual_params(base_line_width=2.0)
+                
                 axes_actor = self.plotter.add_axes(
                     xlabel='East (m)', 
                     ylabel='North (m)', 
                     zlabel='',  # Hide Z-axis label for top-down view
-                    line_width=2,
+                    line_width=scaled_line_width,
                     labels_off=False
                 )
                 dynamic_actors.append(axes_actor)
@@ -2502,11 +2614,14 @@ class TrajectoryVisualizer:
                         trail_points = np.array(trail_positions)
                         trail_line = pv.lines_from_points(trail_points)
                         
+                        # Get scaled line width for trails
+                        _, scaled_line_width = self._get_scaled_visual_params(base_line_width=8.0)
+                        
                         # Add trail with fading opacity
                         trail_actor = self.plotter.add_mesh(
                             trail_line,
                             color=color,
-                            line_width=8,  # Same as missiles
+                            line_width=scaled_line_width,
                             opacity=0.8,
                             render_lines_as_tubes=True
                         )
@@ -2515,10 +2630,12 @@ class TrajectoryVisualizer:
                     # Add velocity vector (arrow head) for current position
                     if np.linalg.norm(current_velocity) > 0:
                         vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                        # Scale arrow size
+                        arrow_scale = 12.0 / self.scale_factor
                         arrow = pv.Arrow(
                             start=current_position,
                             direction=vel_norm,
-                            scale=12.0,  # Same as missiles
+                            scale=arrow_scale,
                             tip_length=0.4,
                             tip_radius=0.3,
                             shaft_radius=0.15
@@ -2546,11 +2663,14 @@ class TrajectoryVisualizer:
                         trail_points = np.array(trail_positions)
                         trail_line = pv.lines_from_points(trail_points)
                         
-                        # Add missile trail with fading opacity
+                        # Get scaled line width for trails
+                        _, scaled_line_width = self._get_scaled_visual_params(base_line_width=8.0)
+                        
+                        # Add trail with fading opacity
                         trail_actor = self.plotter.add_mesh(
                             trail_line,
                             color=color,
-                            line_width=8,
+                            line_width=scaled_line_width,
                             opacity=0.8,
                             render_lines_as_tubes=True
                         )
@@ -2559,10 +2679,12 @@ class TrajectoryVisualizer:
                     # Add velocity vector (arrow head) for current missile position
                     if np.linalg.norm(current_velocity) > 0:
                         vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                        # Scale arrow size
+                        arrow_scale = 12.0 / self.scale_factor
                         arrow = pv.Arrow(
                             start=current_position,
                             direction=vel_norm,
-                            scale=12.0,  # Same as trajectories
+                            scale=arrow_scale,
                             tip_length=0.4,
                             tip_radius=0.3,
                             shaft_radius=0.15
@@ -2578,7 +2700,7 @@ class TrajectoryVisualizer:
                 # Add explosion effects for this frame
                 for explosion_info in frame_data['explosions']:
                     position = explosion_info['position']
-                    radius = explosion_info['radius']
+                    radius = explosion_info['radius'] / self.scale_factor  # Scale explosion radius
                     time_factor = explosion_info['time_factor']
                     participants = explosion_info['participants']
                     
@@ -2645,6 +2767,8 @@ Examples:
   python sim_visualize_tracks.py --mode auto         # Auto-detect (default)
   python sim_visualize_tracks.py --topdown           # Generate both 3D and top-down videos
   python sim_visualize_tracks.py --topdown --video-zoom 1.5  # Top-down with zoom
+  python sim_visualize_tracks.py --scale-factor 10   # Scale everything down by 10x
+  python sim_visualize_tracks.py --scale-factor 5 --topdown  # Scale down and generate both videos
         """
     )
     parser.add_argument(
@@ -2687,6 +2811,12 @@ Examples:
         action='store_true',
         help='Generate both regular 3D video and top-down video (looking straight down from above)'
     )
+    parser.add_argument(
+        '--scale-factor',
+        type=float,
+        default=1.0,
+        help='Scale factor for all positions and velocities (default: 1.0, higher values = smaller scale, e.g., 10.0 = 1/10th size)'
+    )
     
     args = parser.parse_args()
     
@@ -2695,6 +2825,8 @@ Examples:
         print("Trajectory Visualization Suite")
         print("=" * 50)
         print(f"Visualization mode: {args.mode}")
+        if args.scale_factor != 1.0:
+            print(f"Scale factor: {args.scale_factor} (all positions and velocities scaled by 1/{args.scale_factor})")
         print("-" * 50)
         
         # Setup WSLg-specific configurations
@@ -2703,7 +2835,7 @@ Examples:
         
         # Load reference location
         print("Loading reference LLA...")
-        visualizer = TrajectoryVisualizer(visualization_mode=args.mode, topology_offset=args.topology_offset)
+        visualizer = TrajectoryVisualizer(visualization_mode=args.mode, topology_offset=args.topology_offset, scale_factor=args.scale_factor)
         ref_origin = visualizer.load_reference_lla_from_json('input.json')
         
         # Load global time steps
