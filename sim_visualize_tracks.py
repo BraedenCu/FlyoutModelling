@@ -1335,17 +1335,15 @@ class TrajectoryVisualizer:
     
     def add_missiles_to_plot(self, missile_meshes: Dict[int, pv.PolyData]):
         """Add missile meshes to the visualization."""
-        # Color palette for missiles (different from trajectories)
-        missile_colors = ['orange', 'purple', 'brown', 'pink', 'cyan', 'lime', 'gold', 'coral']
+        # All missiles use yellow color
+        missile_color = 'yellow'
         
         for i, (missile_id, mesh_data) in enumerate(missile_meshes.items()):
-            color = missile_colors[i % len(missile_colors)]
-            
             # Add missile line as thick tube for better visibility
             tube = mesh_data['line'].tube(radius=15.0)  # Increased from 8.0 to 15.0
             self.plotter.add_mesh(
                 tube,
-                color=color,
+                color=missile_color,
                 line_width=30,  # Increased from 20 to 30
                 show_scalar_bar=False,
                 lighting=True,
@@ -1361,7 +1359,7 @@ class TrajectoryVisualizer:
                 if mesh_data['velocity_vectors'].n_points > 0:
                     self.plotter.add_mesh(
                         mesh_data['velocity_vectors'],
-                        color=color,
+                        color=missile_color,
                         opacity=1.0  # Increased from 0.8 to 1.0 (30% more opaque)
                     )
             
@@ -1373,7 +1371,7 @@ class TrajectoryVisualizer:
                     [f'Missile {missile_id}'],
                     font_size=16,
                     bold=True,
-                    text_color=color
+                    text_color=missile_color
                 )
     
     def create_animation_data(self, trajectory_meshes: Dict[int, pv.PolyData], 
@@ -1699,18 +1697,8 @@ class TrajectoryVisualizer:
                     current_velocity = missile_info['current_velocity']
                     trail_positions = missile_info['trail_positions']
                     
-                    # Check if this missile has intercepted a trajectory
-                    missile_intercepted = False
-                    for collision in self.collision_events:
-                        if missile_id in collision.participants and frame_data['time'] >= collision.time:
-                            missile_intercepted = True
-                            break
-                    
-                    # Choose color based on interception status
-                    if missile_intercepted:
-                        color = 'green'  # Intercepted missiles are green
-                    else:
-                        color = 'orange'  # Normal missiles are orange
+                    # All missiles use yellow color
+                    color = 'yellow'
                     
                     # Create trail line for missile
                     if len(trail_positions) > 1:
@@ -1772,7 +1760,7 @@ class TrajectoryVisualizer:
                     dynamic_actors.append(explosion_actor)
                 
                 # Add legend (dynamic - may change each frame)
-                legend_text = f"Animation Frame {i+1}/{len(self.animation_data)}\nBlue: Trajectories\nOrange: Missiles"
+                legend_text = f"Animation Frame {i+1}/{len(self.animation_data)}\nBlue: Trajectories\nYellow: Missiles"
                 if self.collision_events:
                     legend_text += "\nGreen: Intercepted Objects"
                 if self.protected_regions:
@@ -1826,46 +1814,43 @@ class TrajectoryVisualizer:
                             dynamic_actors.append(end_arrow_actor)
                     
                     # Add end position arrows for missiles
-                    for missile_info in frame_data['active_missiles']:
-                        missile_id = missile_info['id']
-                        current_position = missile_info['current_position']
-                        current_velocity = missile_info['current_velocity']
-                        
-                        # Check if this missile has intercepted a trajectory
-                        missile_intercepted = False
-                        for collision in self.collision_events:
-                            if missile_id in collision.participants and frame_data['time'] >= collision.time:
-                                missile_intercepted = True
-                                break
-                        
-                        if np.linalg.norm(current_velocity) > 0:
-                            vel_norm = current_velocity / np.linalg.norm(current_velocity)
-                            arrow = pv.Arrow(
-                                start=current_position,
-                                direction=vel_norm,
-                                scale=50.0,  # Much larger arrow for missile end position
-                                tip_length=0.4,
-                                tip_radius=0.6,
-                                shaft_radius=0.3
-                            )
+                    for missile_id, mesh_data in missile_meshes.items():
+                        if mesh_data['positions'].shape[0] > 0:
+                            end_position = mesh_data['positions'][-1]
+                            end_velocity = mesh_data['velocities'][-1]
                             
-                            # Choose color based on interception status
-                            if missile_intercepted:
-                                color = 'green'  # Intercepted missiles are green
-                            else:
-                                color = 'orange'  # Normal missiles are orange
-                            
-                            end_arrow_actor = self.plotter.add_mesh(
-                                arrow,
-                                color=color,
-                                opacity=0.9,
-                                lighting=True,
-                                ambient=0.8,
-                                diffuse=0.2,
-                                specular=0.5,
-                                specular_power=10
-                            )
-                            dynamic_actors.append(end_arrow_actor)
+                            if np.linalg.norm(end_velocity) > 0:
+                                vel_norm = end_velocity / np.linalg.norm(end_velocity)
+                                arrow = pv.Arrow(
+                                    start=end_position,
+                                    direction=vel_norm,
+                                    scale=50.0,  # Much larger arrow for missile end position
+                                    tip_length=0.4,
+                                    tip_radius=0.6,
+                                    shaft_radius=0.3
+                                )
+                                
+                                # All missiles use yellow color
+                                color = 'yellow'
+                                self.plotter.add_mesh(
+                                    arrow,
+                                    color=color,
+                                    opacity=0.9,
+                                    lighting=True,
+                                    ambient=0.8,
+                                    diffuse=0.2,
+                                    specular=0.5,
+                                    specular_power=10
+                                )
+                                
+                                # Add end position label
+                                self.plotter.add_point_labels(
+                                    [end_position],
+                                    [f'End M{missile_id}'],
+                                    font_size=14,
+                                    bold=True,
+                                    text_color=color
+                                )
                 
                 legend_actor = self.plotter.add_text(
                     legend_text,
@@ -2058,7 +2043,7 @@ class TrajectoryVisualizer:
         self._setup_camera_with_zoom(photo_zoom)
         
         # Add legend
-        legend_text = "Trajectory Visualization\nBlue: Trajectories\nOrange: Missiles"
+        legend_text = "Trajectory Visualization\nBlue: Trajectories\nYellow: Missiles"
         if self.collision_events:
             legend_text += "\nGreen: Intercepted Objects"
         if self.radars:
@@ -2304,7 +2289,7 @@ class TrajectoryVisualizer:
                             shaft_radius=0.3
                         )
                         
-                        color = ['orange', 'purple', 'brown', 'pink', 'cyan', 'lime', 'gold', 'coral'][missile_id % 8]
+                        color = 'yellow'  # All missiles use yellow color
                         self.plotter.add_mesh(
                             arrow,
                             color=color,
@@ -2553,18 +2538,8 @@ class TrajectoryVisualizer:
                     current_velocity = missile_info['current_velocity']
                     trail_positions = missile_info['trail_positions']
                     
-                    # Check if this missile has intercepted a trajectory
-                    missile_intercepted = False
-                    for collision in self.collision_events:
-                        if missile_id in collision.participants and frame_data['time'] >= collision.time:
-                            missile_intercepted = True
-                            break
-                    
-                    # Choose color based on interception status
-                    if missile_intercepted:
-                        color = 'green'  # Intercepted missiles are green
-                    else:
-                        color = 'orange'  # Normal missiles are orange
+                    # All missiles use yellow color
+                    color = 'yellow'
                     
                     # Create trail line for missile
                     if len(trail_positions) > 1:
@@ -2626,7 +2601,7 @@ class TrajectoryVisualizer:
                     dynamic_actors.append(explosion_actor)
                 
                 # Add legend for top-down view
-                legend_text = f"Top-Down Animation Frame {i+1}/{len(self.animation_data)}\nBlue: Trajectories\nOrange: Missiles"
+                legend_text = f"Top-Down Animation Frame {i+1}/{len(self.animation_data)}\nBlue: Trajectories\nYellow: Missiles"
                 if self.collision_events:
                     legend_text += "\nGreen: Intercepted Objects"
                 if self.protected_regions:
