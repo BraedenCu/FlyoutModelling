@@ -38,7 +38,7 @@ sudo apt-get install ffmpeg
 Run the visualization suite with the provided sample data:
 
 ```bash
-python sim_visualize_tracks.py
+python sim_visualize_tracks.py --mode topography --photo-zoom 1.5 --video-zoom 0.5
 ```
 
 This will:
@@ -46,6 +46,52 @@ This will:
 2. Create a static visualization saved as `trajectory_static.png`
 3. Generate an animation saved as `trajectory_animation.mp4`
 4. Open an interactive 3D visualization window
+
+### Visualization Modes
+
+The visualization suite supports three different modes for the terrain display:
+
+#### Auto-detect Mode (Default)
+```bash
+python sim_visualize_tracks.py --mode auto
+```
+Automatically detects and uses satellite imagery if available in the `satellite_data/` directory, otherwise falls back to topographic elevation colormap.
+
+#### Satellite Imagery Mode
+```bash
+python sim_visualize_tracks.py --mode satellite
+```
+Forces the use of satellite imagery. Requires satellite image files to be present in the `satellite_data/` directory. If no satellite data is found, the program will exit with an error.
+
+#### Topography Mode
+```bash
+python sim_visualize_tracks.py --mode topography
+```
+Forces the use of topographic elevation colormap, ignoring any available satellite imagery. This mode uses synthetic terrain with realistic features.
+
+### Command Line Options
+
+```bash
+python sim_visualize_tracks.py --help
+```
+
+Available options:
+- `--mode {satellite,topography,auto}`: Choose visualization mode (default: auto)
+- `--photo-zoom FLOAT`: Camera zoom factor for static photos (default: 1.0, higher values = more zoomed in)
+- `--video-zoom FLOAT`: Camera zoom factor for video animations (default: 1.0, higher values = more zoomed in)
+
+### Examples
+
+```bash
+# Use satellite imagery with custom zoom levels
+python sim_visualize_tracks.py --mode satellite --photo-zoom 1.5 --video-zoom 2.0
+
+# Use topography mode with closer camera for photos
+python sim_visualize_tracks.py --mode topography --photo-zoom 2.0
+
+# Auto-detect mode with wider view for videos
+python sim_visualize_tracks.py --mode auto --video-zoom 0.7
+```
 
 ### Input Data Format
 

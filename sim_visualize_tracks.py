@@ -25,6 +25,7 @@ import subprocess
 import signal
 import sys
 import atexit
+import argparse
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore")
@@ -593,23 +594,25 @@ class TopographyManager:
 class TrajectoryVisualizer:
     """Main visualization class for trajectory display."""
     
-    def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0)):
+    def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0), visualization_mode='auto'):
         """Initialize the trajectory visualizer."""
+        self.topography_manager = topography_manager or TopographyManager(ref_origin=ref_origin)
+        self.ref_origin = ref_origin
+        self.visualization_mode = visualization_mode
+        
+        # Data storage
         self.trajectories = []
-        self.missiles = []
         self.protected_regions = []
+        self.missiles = []
         self.collision_events = []
+        self.global_time_steps = []
+        
+        # Visualization components
         self.plotter = None
         self.topography_mesh = None
         self.animation_data = []
         
-        # Initialize topography manager
-        if topography_manager is None:
-            self.topography_manager = TopographyManager(ref_origin=ref_origin)
-        else:
-            self.topography_manager = topography_manager
-        
-        # Register cleanup for graceful exit
+        # Register cleanup
         register_cleanup()
     
     def close(self):
@@ -788,30 +791,51 @@ class TrajectoryVisualizer:
     
     def load_reference_lla_from_json(self, json_file: str) -> Tuple[float, float, float]:
         """Load reference latitude, longitude, altitude from JSON file."""
-        with open(json_file, 'r') as f:
-            data = json.load(f)
-        
-        if 'reference_lla' in data:
-            ref_data = data['reference_lla']
-            ref_lla = (
-                ref_data['latitude'],
-                ref_data['longitude'], 
-                ref_data['altitude']
-            )
-            self.ref_origin = ref_lla
-            # Update topography manager with new reference
-            if self.topography_manager:
-                self.topography_manager.ref_origin = ref_lla
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            
+            ref_data = data.get('reference_lla', {})
+            lat = ref_data.get('latitude', 0.0)
+            lon = ref_data.get('longitude', 0.0)
+            alt = ref_data.get('altitude', 0.0)
+            description = ref_data.get('description', 'Unknown location')
+            
+            print(f"Loaded reference LLA: ({lat}, {lon}, {alt})")
+            print(f"Reference location: {description}")
+            
+            # Update the reference origin in the topography manager
+            self.ref_origin = (lat, lon, alt)
+            if hasattr(self.topography_manager, 'ref_origin'):
+                self.topography_manager.ref_origin = (lat, lon, alt)
                 self.topography_manager._setup_transformers()
             
-            print(f"Loaded reference LLA: {ref_lla}")
-            if 'description' in ref_data:
-                print(f"Reference location: {ref_data['description']}")
+            return (lat, lon, alt)
             
-            return ref_lla
-        else:
-            print("No reference_lla found in JSON, using default (0, 0, 0)")
-            return self.ref_origin
+        except Exception as e:
+            print(f"Error loading reference LLA: {e}")
+            return (0.0, 0.0, 0.0)
+    
+    def load_time_steps_from_json(self, json_file: str) -> List[float]:
+        """Load global time steps from JSON file."""
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            
+            time_steps = data.get('time_steps', [])
+            if time_steps:
+                print(f"Loaded {len(time_steps)} global time steps: {time_steps}")
+                self.global_time_steps = time_steps
+            else:
+                print("No global time_steps found in JSON, will use trajectory-based timing")
+                self.global_time_steps = []
+            
+            return time_steps
+            
+        except Exception as e:
+            print(f"Error loading time steps: {e}")
+            self.global_time_steps = []
+            return []
     
     def calculate_bounds(self) -> Tuple[float, float, float, float]:
         """Calculate the bounding box for all trajectories and missiles."""
@@ -840,6 +864,7 @@ class TrajectoryVisualizer:
     
     def setup_topography(self, bounds: Tuple[float, float, float, float], satellite_path: str = None):
         """Setup topographic data for visualization with optional satellite overlay."""
+        import numpy as np
         print("Setting up topography...")
         
         # If satellite imagery is provided, use a flat mesh matching the simulation bounds
@@ -1157,26 +1182,42 @@ class TrajectoryVisualizer:
                 opacity=1.0  # Full opacity for satellite imagery
             )
         else:
-            print("Adding topography with elevation colormap...")
-            # Create custom colormap for topography
-            colors = ['darkgreen', 'forestgreen', 'yellow', 'orange', 'brown', 'white']
-            n_bins = 256
-            cmap = LinearSegmentedColormap.from_list('terrain', colors, N=n_bins)
-            
-            # Add topography mesh with elevation colormap
-            self.plotter.add_mesh(
-                self.topography_mesh,
-                scalars='elevation',
-                cmap=cmap,
-                show_edges=False,
-                lighting=True,
-                ambient=0.3,
-                diffuse=0.7,
-                specular=0.2,
-                specular_power=15,
-                smooth_shading=True,
-                opacity=0.9
-            )
+            if self.visualization_mode == 'topography':
+                print("Adding topography with solid color...")
+                # Use solid color for topography mode
+                self.plotter.add_mesh(
+                    self.topography_mesh,
+                    color='tan',  # Solid tan/sand color
+                    show_edges=False,
+                    lighting=True,
+                    ambient=0.3,
+                    diffuse=0.7,
+                    specular=0.2,
+                    specular_power=15,
+                    smooth_shading=True,
+                    opacity=0.9
+                )
+            else:
+                print("Adding topography with elevation colormap...")
+                # Create custom colormap for topography
+                colors = ['darkgreen', 'forestgreen', 'yellow', 'orange', 'brown', 'white']
+                n_bins = 256
+                cmap = LinearSegmentedColormap.from_list('terrain', colors, N=n_bins)
+                
+                # Add topography mesh with elevation colormap
+                self.plotter.add_mesh(
+                    self.topography_mesh,
+                    scalars='elevation',
+                    cmap=cmap,
+                    show_edges=False,
+                    lighting=True,
+                    ambient=0.3,
+                    diffuse=0.7,
+                    specular=0.2,
+                    specular_power=15,
+                    smooth_shading=True,
+                    opacity=0.9
+                )
     
     def add_trajectories_to_plot(self, trajectory_meshes: Dict[int, pv.PolyData]):
         """Add trajectory meshes to the visualization."""
@@ -1260,14 +1301,20 @@ class TrajectoryVisualizer:
         """Prepare data for animation."""
         self.animation_data = []
         
-        # Get all unique timestamps from trajectories and missiles
-        all_times = set()
-        for mesh_data in trajectory_meshes.values():
-            all_times.update(mesh_data['times'])
-        
-        if missile_meshes:
-            for mesh_data in missile_meshes.values():
+        # Use global time steps if available, otherwise extract from trajectories
+        if self.global_time_steps:
+            print(f"Using global time steps for animation: {self.global_time_steps}")
+            all_times = set(self.global_time_steps)
+        else:
+            print("Using trajectory-based time steps for animation")
+            # Get all unique timestamps from trajectories and missiles
+            all_times = set()
+            for mesh_data in trajectory_meshes.values():
                 all_times.update(mesh_data['times'])
+            
+            if missile_meshes:
+                for mesh_data in missile_meshes.values():
+                    all_times.update(mesh_data['times'])
         
         # Add collision event times
         for event in self.collision_events:
@@ -1277,6 +1324,7 @@ class TrajectoryVisualizer:
                 all_times.add(t)
         
         sorted_times = sorted(all_times)
+        print(f"Animation will have {len(sorted_times)} frames at times: {sorted_times}")
         
         for time in sorted_times:
             frame_data = {
@@ -1336,7 +1384,7 @@ class TrajectoryVisualizer:
     
     def animate_trajectories(self, trajectory_meshes: Dict[int, pv.PolyData], 
                            missile_meshes: Dict[int, pv.PolyData] = None,
-                           fps: int = 10, save_path: str = None):
+                           fps: int = 10, save_path: str = None, video_zoom: float = 1.0):
         """Create an animation of the trajectories and missiles."""
         if not self.animation_data:
             self.create_animation_data(trajectory_meshes, missile_meshes)
@@ -1364,7 +1412,7 @@ class TrajectoryVisualizer:
             self.add_collision_markers_to_plot()
             
             # Calculate optimal camera position to include all elements
-            self._setup_animation_camera()
+            self._setup_animation_camera(video_zoom)
             
             # Track dynamic actors to clear each frame
             dynamic_actors = []
@@ -1551,7 +1599,7 @@ class TrajectoryVisualizer:
                 self._create_video_from_frames(frame_paths, save_path, fps)
                 print(f"Animation saved to: {save_path}")
     
-    def _setup_animation_camera(self):
+    def _setup_animation_camera(self, video_zoom: float = 1.0):
         """Setup camera position optimized for animation to include all elements."""
         # Calculate bounds including trajectories, protected regions, and topography
         all_points = []
@@ -1593,8 +1641,8 @@ class TrajectoryVisualizer:
             z_range = z_max - z_min
             max_range = max(x_range, y_range, z_range)
             
-            # Set camera position with closer zoom for better detail
-            camera_distance = max_range * 0.5  # Reduced from 2.0 to 0.8 for closer view
+            # Set camera position with zoom factor applied
+            camera_distance = max_range * 0.5 / video_zoom  # Apply zoom factor
             
             # Position camera at an angle to show 3D perspective
             camera_pos = (
@@ -1609,12 +1657,13 @@ class TrajectoryVisualizer:
                 (0, 0, 1)  # Up vector
             ]
             
-            # Zoom in closer to fit all data with less margin
-            self.plotter.camera.zoom(0.7)  # Increased from 0.7 to 1.2 for closer zoom
+            # Apply additional zoom factor
+            self.plotter.camera.zoom(video_zoom)
+            print(f"Animation camera set with zoom factor: {video_zoom}")
         else:
             # Fallback camera position
             self.plotter.camera_position = 'iso'
-            self.plotter.camera.zoom(1.0)
+            self.plotter.camera.zoom(video_zoom)
     
     def _create_video_from_frames(self, frame_paths: List[str], output_path: str, fps: int):
         """Create video from frame images using ffmpeg."""
@@ -1638,7 +1687,39 @@ class TrajectoryVisualizer:
             print("ffmpeg not found or failed. Please install ffmpeg to create videos.")
             print("Individual frames are available in the temporary directory.")
     
-    def create_static_visualization(self, save_path: str = None, satellite_path: str = None):
+    def _setup_camera_with_zoom(self, zoom_factor: float = 1.0):
+        """Setup camera position with zoom factor."""
+        if self.topography_mesh is None:
+            return
+        
+        # Calculate bounds from topography mesh
+        bounds = self.topography_mesh.bounds
+        x_min, x_max, y_min, y_max, z_min, z_max = bounds
+        
+        # Calculate center and size
+        center_x = (x_min + x_max) / 2
+        center_y = (y_min + y_max) / 2
+        center_z = (z_min + z_max) / 2
+        
+        # Calculate size for camera positioning
+        size_x = x_max - x_min
+        size_y = y_max - y_min
+        size_z = z_max - z_min
+        max_size = max(size_x, size_y, size_z)
+        
+        # Apply zoom factor (higher zoom = closer camera)
+        camera_distance = max_size * 2.0 / zoom_factor
+        
+        # Set camera position
+        camera_pos = (center_x, center_y - camera_distance, center_z + camera_distance * 0.5)
+        focal_point = (center_x, center_y, center_z)
+        
+        self.plotter.camera_position = [camera_pos, focal_point, (0, 0, 1)]
+        self.plotter.camera.zoom(zoom_factor)
+        
+        print(f"Camera set with zoom factor: {zoom_factor}")
+    
+    def create_static_visualization(self, save_path: str = None, satellite_path: str = None, photo_zoom: float = 1.0):
         """Create a static visualization of all trajectories with optional satellite overlay."""
         if not self.trajectories:
             print("No trajectories loaded!")
@@ -1674,6 +1755,9 @@ class TrajectoryVisualizer:
         
         # Add collision markers
         self.add_collision_markers_to_plot()
+        
+        # Setup camera with zoom
+        self._setup_camera_with_zoom(photo_zoom)
         
         # Add legend
         legend_text = "Trajectory Visualization\nRed: Trajectory 1\nBlue: Trajectory 2"
@@ -1848,10 +1932,44 @@ class TrajectoryVisualizer:
 
 def main():
     """Main function to run the trajectory visualization suite."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="Trajectory Visualization Suite - Choose visualization mode",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python sim_visualize_tracks.py --mode satellite    # Use satellite imagery
+  python sim_visualize_tracks.py --mode topography   # Use topographic map
+  python sim_visualize_tracks.py --mode auto         # Auto-detect (default)
+        """
+    )
+    parser.add_argument(
+        '--mode', 
+        choices=['satellite', 'topography', 'auto'],
+        default='auto',
+        help='Visualization mode: satellite (satellite imagery), topography (elevation colormap), or auto (auto-detect)'
+    )
+    parser.add_argument(
+        '--photo-zoom',
+        type=float,
+        default=1.0,
+        help='Camera zoom factor for static photos (default: 1.0, higher values = more zoomed in)'
+    )
+    parser.add_argument(
+        '--video-zoom',
+        type=float,
+        default=1.0,
+        help='Camera zoom factor for video animations (default: 1.0, higher values = more zoomed in)'
+    )
+    
+    args = parser.parse_args()
+    
     visualizer = None
     try:
         print("Trajectory Visualization Suite")
         print("=" * 50)
+        print(f"Visualization mode: {args.mode}")
+        print("-" * 50)
         
         # Setup WSLg-specific configurations
         configure_pyvista_for_wslg()
@@ -1859,8 +1977,12 @@ def main():
         
         # Load reference location
         print("Loading reference LLA...")
-        visualizer = TrajectoryVisualizer()
+        visualizer = TrajectoryVisualizer(visualization_mode=args.mode)
         ref_origin = visualizer.load_reference_lla_from_json('input.py')
+        
+        # Load global time steps
+        print("Loading global time steps...")
+        visualizer.load_time_steps_from_json('input.py')
         
         # Load trajectory data
         print("Loading trajectory data...")
@@ -1882,51 +2004,98 @@ def main():
         collisions = visualizer.detect_collisions()
         print(f"Detected {len(collisions)} collision events")
         
-        # Check for satellite imagery
+        # Determine visualization mode and satellite path
         satellite_path = None
         satellite_data_dir = "satellite_data"
-        if os.path.exists(satellite_data_dir):
-            # First look for quick version for faster processing
-            quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
-            if os.path.exists(quick_path):
-                satellite_path = quick_path
-                file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                print(f"Using quick satellite imagery for faster processing: {satellite_path} ({file_size_mb:.1f}MB)")
-            else:
-                # Fallback to high-resolution files if quick version not available
-                jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
-                if jp2_files:
-                    # Use the largest JP2 file (highest resolution)
-                    jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
-                    satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
+        
+        if args.mode == 'satellite':
+            # Force satellite mode - check if satellite data exists
+            if os.path.exists(satellite_data_dir):
+                # First look for quick version for faster processing
+                quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
+                if os.path.exists(quick_path):
+                    satellite_path = quick_path
                     file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                    print(f"Found high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                    print(f"Using quick satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
                 else:
-                    # Look for other satellite image formats
-                    for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
-                        for file in os.listdir(satellite_data_dir):
-                            if file.lower().endswith(ext):
-                                satellite_path = os.path.join(satellite_data_dir, file)
-                                file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                                print(f"Found satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                    # Fallback to high-resolution files if quick version not available
+                    jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
+                    if jp2_files:
+                        # Use the largest JP2 file (highest resolution)
+                        jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
+                        satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
+                        file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                        print(f"Using high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                    else:
+                        # Look for other satellite image formats
+                        for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
+                            for file in os.listdir(satellite_data_dir):
+                                if file.lower().endswith(ext):
+                                    satellite_path = os.path.join(satellite_data_dir, file)
+                                    file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                                    print(f"Using satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                                    break
+                            if satellite_path:
                                 break
-                        if satellite_path:
-                            break
+                
+                if not satellite_path:
+                    print("ERROR: Satellite mode requested but no satellite imagery found in satellite_data/ directory")
+                    print("Please ensure satellite imagery files are present in the satellite_data/ directory")
+                    return
+            else:
+                print("ERROR: Satellite mode requested but satellite_data/ directory not found")
+                print("Please ensure satellite imagery files are present in the satellite_data/ directory")
+                return
+                
+        elif args.mode == 'topography':
+            # Force topography mode - ignore satellite data
+            print("Using topographic elevation colormap (satellite imagery disabled)")
+            satellite_path = None
+            
+        else:  # args.mode == 'auto'
+            # Auto-detect mode (original behavior)
+            if os.path.exists(satellite_data_dir):
+                # First look for quick version for faster processing
+                quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
+                if os.path.exists(quick_path):
+                    satellite_path = quick_path
+                    file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                    print(f"Auto-detected quick satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                else:
+                    # Fallback to high-resolution files if quick version not available
+                    jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
+                    if jp2_files:
+                        # Use the largest JP2 file (highest resolution)
+                        jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
+                        satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
+                        file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                        print(f"Auto-detected high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                    else:
+                        # Look for other satellite image formats
+                        for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
+                            for file in os.listdir(satellite_data_dir):
+                                if file.lower().endswith(ext):
+                                    satellite_path = os.path.join(satellite_data_dir, file)
+                                    file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                                    print(f"Auto-detected satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                                    break
+                            if satellite_path:
+                                break
         
         # Create static visualization
         print("Creating static visualization...")
         if satellite_path:
             print(f"Using satellite imagery: {satellite_path}")
-            visualizer.create_static_visualization('trajectory_static.png', satellite_path)
+            visualizer.create_static_visualization('trajectory_static.png', satellite_path, photo_zoom=args.photo_zoom)
         else:
-            print("No satellite imagery found, using elevation colormap")
-            visualizer.create_static_visualization('trajectory_static.png')
+            print("Using elevation colormap for topography")
+            visualizer.create_static_visualization('trajectory_static.png', photo_zoom=args.photo_zoom)
         
         # Create animation
         print("Creating animation...")
         trajectory_meshes = visualizer.create_trajectory_meshes()
         missile_meshes = visualizer.create_missile_meshes()
-        visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4')
+        visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4', video_zoom=args.video_zoom)
         
         # Create interactive visualization with WSLg optimization
         print("Creating interactive visualization...")
