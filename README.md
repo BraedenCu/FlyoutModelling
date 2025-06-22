@@ -79,18 +79,23 @@ Available options:
 - `--mode {satellite,topography,auto}`: Choose visualization mode (default: auto)
 - `--photo-zoom FLOAT`: Camera zoom factor for static photos (default: 1.0, higher values = more zoomed in)
 - `--video-zoom FLOAT`: Camera zoom factor for video animations (default: 1.0, higher values = more zoomed in)
+- `--intermediate-frames INT`: Number of intermediate frames between global time steps (default: 4, higher values = smoother animation)
+- `--static-only`: Skip animation generation and only create static visualization
 
 ### Examples
 
 ```bash
-# Use satellite imagery with custom zoom levels
-python sim_visualize_tracks.py --mode satellite --photo-zoom 1.5 --video-zoom 2.0
+# Use satellite imagery with custom zoom levels and smooth animation
+python sim_visualize_tracks.py --mode satellite --photo-zoom 1.5 --video-zoom 2.0 --intermediate-frames 8
 
-# Use topography mode with closer camera for photos
-python sim_visualize_tracks.py --mode topography --photo-zoom 2.0
+# Use topography mode with closer camera for photos and very smooth animation
+python sim_visualize_tracks.py --mode topography --photo-zoom 2.0 --intermediate-frames 10
 
-# Auto-detect mode with wider view for videos
-python sim_visualize_tracks.py --mode auto --video-zoom 0.7
+# Auto-detect mode with wider view for videos and standard smoothness
+python sim_visualize_tracks.py --mode auto --video-zoom 0.7 --intermediate-frames 4
+
+# Static-only mode - skip animation for faster processing
+python sim_visualize_tracks.py --mode topography --static-only --photo-zoom 1.5
 ```
 
 ### Input Data Format
