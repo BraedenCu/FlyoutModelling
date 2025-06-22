@@ -38,14 +38,24 @@ sudo apt-get install ffmpeg
 Run the visualization suite with the provided sample data:
 
 ```bash
+python sim_visualize_tracks.py
+```
+
+```bash
 python sim_visualize_tracks.py --mode topography --photo-zoom 1.5 --video-zoom 0.5
 ```
 
+```bash
+# Generate both 3D and top-down videos
+python sim_visualize_tracks.py --topdown
+```
+
 This will:
-1. Load trajectory data from `input.py`
+1. Load trajectory data from `input.json`
 2. Create a static visualization saved as `trajectory_static.png`
 3. Generate an animation saved as `trajectory_animation.mp4`
-4. Open an interactive 3D visualization window
+4. Generate a top-down animation saved as `trajectory_animation_topdown.mp4` (when using `--topdown`)
+5. Open an interactive 3D visualization window
 
 ### Visualization Modes
 
@@ -82,6 +92,7 @@ Available options:
 - `--intermediate-frames INT`: Number of intermediate frames between global time steps (default: 4, higher values = smoother animation)
 - `--static-only`: Skip animation generation and only create static visualization
 - `--topology-offset FLOAT`: Topography offset in meters - adjusts where the terrain surface appears relative to z=0 (default: 300.0, higher values = terrain appears lower)
+- `--topdown`: Generate both regular 3D video and top-down video (looking straight down from above)
 
 ### Examples
 
@@ -100,6 +111,12 @@ python sim_visualize_tracks.py --mode topography --static-only --photo-zoom 1.5
 
 # Adjust terrain positioning - fine-tune where objects at z=0 appear relative to terrain
 python sim_visualize_tracks.py --mode topography --topology-offset 200 --photo-zoom 1.5
+
+# Generate both 3D and top-down videos for comprehensive analysis
+python sim_visualize_tracks.py --topdown --video-zoom 1.2
+
+# Top-down view with satellite imagery and custom zoom
+python sim_visualize_tracks.py --mode satellite --topdown --video-zoom 1.5 --intermediate-frames 6
 ```
 
 ### Input Data Format
@@ -181,7 +198,8 @@ visualizer = TrajectoryVisualizer(topography_manager=topo_manager)
 ## Output Files
 
 - `trajectory_static.png`: Static 3D visualization image
-- `trajectory_animation.mp4`: Time-based animation video
+- `trajectory_animation.mp4`: Time-based animation video (3D perspective)
+- `trajectory_animation_topdown.mp4`: Time-based animation video (top-down view, generated with `--topdown` flag)
 - Interactive 3D window for real-time exploration
 
 ## Visualization Features
@@ -203,6 +221,13 @@ visualizer = TrajectoryVisualizer(topography_manager=topo_manager)
 - Multiple trajectories active simultaneously
 - Velocity vector animation
 - Time display overlay
+
+### Top-Down Visualization
+- Bird's-eye view of the entire scene
+- Perfect for analyzing spatial relationships and trajectories
+- Shows X-Y plane projection (East-North coordinates)
+- Ideal for tactical analysis and path planning
+- Generated alongside regular 3D video with `--topdown` flag
 
 ### Interactive Controls
 - Mouse rotation, zoom, and pan
