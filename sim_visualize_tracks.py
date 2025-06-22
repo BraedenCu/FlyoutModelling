@@ -842,67 +842,96 @@ class TrajectoryVisualizer:
         """Setup topographic data for visualization with optional satellite overlay."""
         print("Setting up topography...")
         
-        # Load satellite imagery if provided
+        # If satellite imagery is provided, use a flat mesh matching the simulation bounds
         if satellite_path and os.path.exists(satellite_path):
             print("Loading satellite imagery overlay...")
             success = self.topography_manager.satellite_manager.load_satellite_imagery(satellite_path)
             if success:
                 print("Satellite imagery loaded successfully")
+                print("Using flat surface scaled to simulation bounds for visualization")
+                import rasterio
+                import numpy as np
+                # Load the image and get its shape
+                with rasterio.open(satellite_path) as src:
+                    # Crop or resample to a reasonable size (e.g., 1000x1000)
+                    height, width = src.shape
+                    max_dim = 1000
+                    if height > max_dim or width > max_dim:
+                        # Calculate window to crop center
+                        start_row = height // 2 - max_dim // 2
+                        start_col = width // 2 - max_dim // 2
+                        end_row = start_row + max_dim
+                        end_col = start_col + max_dim
+                        if src.count >= 3:
+                            img = src.read([1, 2, 3], window=((start_row, end_row), (start_col, end_col)))
+                        else:
+                            img = src.read(1, window=((start_row, end_row), (start_col, end_col)))
+                            img = np.stack([img, img, img], axis=0)
+                        img_height, img_width = max_dim, max_dim
+                    else:
+                        if src.count >= 3:
+                            img = src.read([1, 2, 3])
+                        else:
+                            img = src.read(1)
+                            img = np.stack([img, img, img], axis=0)
+                        img_height, img_width = height, width
+                # Use simulation bounds for mesh
+                x_min, x_max, y_min, y_max = bounds
+                x_coords = np.linspace(x_min, x_max, img_width)
+                y_coords = np.linspace(y_min, y_max, img_height)
+                X, Y = np.meshgrid(x_coords, y_coords)
+                Z = np.zeros_like(X)
+                print(f"Created flat surface with shape: {X.shape} covering bounds: {bounds}")
+                # Create PyVista mesh
+                import pyvista as pv
+                grid = pv.StructuredGrid()
+                grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
+                grid.dimensions = [X.shape[1], X.shape[0], 1]
+                # Create a surface mesh
+                surface = grid.extract_surface()
+                # Create normalized texture coordinates
+                u = (X - X.min()) / (X.max() - X.min())
+                v = (Y - Y.min()) / (Y.max() - Y.min())
+                tex_coords = np.column_stack([u.flatten(), v.flatten()])
+                surface.active_texture_coordinates = tex_coords.astype(np.float32)
+                print(f"Set texture coordinates on flat surface")
+                print(f"Texture coordinates range: {tex_coords.min()} to {tex_coords.max()}")
+                self.topography_mesh = surface
+                return
             else:
                 print("Failed to load satellite imagery, using topography only")
-        
-        # Get topographic data
+        # Otherwise, use the original topography pipeline
         topo_data = self.topography_manager.get_dem_data(bounds)
         if topo_data is None:
             print("Failed to get topography, using flat surface")
             return
-        
         X, Y, Z = topo_data
-        
-        # Ensure arrays are 2D and have the same shape
         if X.ndim != 2 or Y.ndim != 2 or Z.ndim != 2:
             print("Error: Topography arrays must be 2D")
             return
-        
         if X.shape != Y.shape or Y.shape != Z.shape:
             print("Error: Topography arrays must have the same shape")
             return
-        
         print(f"Creating topography mesh with shape: {X.shape}")
-        
-        # Create PyVista mesh
+        import pyvista as pv
         grid = pv.StructuredGrid()
         grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
         grid.dimensions = [X.shape[1], X.shape[0], 1]
-        
-        # Add elevation data as scalar field
         grid.point_data['elevation'] = Z.flatten()
-        
-        # Add satellite texture if available
         tex_coords = None
         if self.topography_manager.satellite_manager.satellite_texture is not None:
             print("Adding satellite texture to topography mesh...")
-            # Calculate texture coordinates
             tex_coords = self.topography_manager.satellite_manager.get_texture_coordinates(X, Y)
             print(f"Texture coordinates shape: {tex_coords.shape}")
-        
         self.topography_mesh = grid
-        
-        # Create a surface mesh for better visualization
         surface = grid.extract_surface()
         surface = surface.smooth(n_iter=10, relaxation_factor=0.1)
-        
-        # Add elevation data as scalar field
         surface.point_data['elevation'] = Z.flatten()
-        
-        # Add texture coordinates to surface if available
         if tex_coords is not None:
-            # Use the newer PyVista API
             surface.active_texture_coordinates = tex_coords.astype(np.float32)
             print(f"Set texture coordinates on surface mesh")
             print(f"Texture coordinates shape: {tex_coords.shape}")
             print(f"Texture coordinates range: {tex_coords.min()} to {tex_coords.max()}")
-        
         self.topography_mesh = surface
     
     def create_trajectory_meshes(self) -> Dict[int, pv.PolyData]:
@@ -1119,17 +1148,13 @@ class TrajectoryVisualizer:
         if self.topography_manager.satellite_manager.satellite_texture is not None:
             print("Adding topography with satellite imagery overlay...")
             # Add topography mesh with satellite texture
+            # Disable lighting to make satellite texture more visible
             self.plotter.add_mesh(
                 self.topography_mesh,
                 texture=self.topography_manager.satellite_manager.satellite_texture,
                 show_edges=False,
-                lighting=True,
-                ambient=0.3,
-                diffuse=0.7,
-                specular=0.2,
-                specular_power=15,
-                smooth_shading=True,
-                opacity=0.95
+                lighting=False,  # Disable lighting for better texture visibility
+                opacity=1.0  # Full opacity for satellite imagery
             )
         else:
             print("Adding topography with elevation colormap...")
