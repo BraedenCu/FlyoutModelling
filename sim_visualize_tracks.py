@@ -1534,7 +1534,7 @@ class TrajectoryVisualizer:
     
     def _interpolate_position_velocity(self, times, positions, velocities, target_time):
         """Interpolate position and velocity between waypoints with proper speed scaling."""
-        if len(times) == 0:
+        if len(times) == 0: 
             return None, None
         
         # Find the two waypoints to interpolate between
@@ -2817,22 +2817,22 @@ Examples:
         print("Creating static visualization...")
         if satellite_path:
             print(f"Using satellite imagery: {satellite_path}")
-            visualizer.create_static_visualization('trajectory_static.png', satellite_path, photo_zoom=args.photo_zoom)
+            visualizer.create_static_visualization('output/trajectory_static.png', satellite_path, photo_zoom=args.photo_zoom)
         else:
             print("Using elevation colormap for topography")
-            visualizer.create_static_visualization('trajectory_static.png', photo_zoom=args.photo_zoom)
+            visualizer.create_static_visualization('output/trajectory_static.png', photo_zoom=args.photo_zoom)
         
         # Create animation (unless static-only mode is enabled)
         if not args.static_only:
             print("Creating animation...")
             trajectory_meshes = visualizer.create_trajectory_meshes()
             missile_meshes = visualizer.create_missile_meshes()
-            visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4', video_zoom=args.video_zoom, intermediate_frames=args.intermediate_frames)
+            visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='output/trajectory_animation.mp4', video_zoom=args.video_zoom, intermediate_frames=args.intermediate_frames)
             
             # Create top-down animation if requested
             if args.topdown:
                 print("Creating top-down animation...")
-                visualizer.animate_trajectories_topdown(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation_topdown.mp4', video_zoom=args.video_zoom, intermediate_frames=args.intermediate_frames)
+                visualizer.animate_trajectories_topdown(trajectory_meshes, missile_meshes, fps=5, save_path='output/trajectory_animation_topdown.mp4', video_zoom=args.video_zoom, intermediate_frames=args.intermediate_frames)
         else:
             print("Skipping animation generation (static-only mode)")
         
@@ -2850,10 +2850,10 @@ Examples:
                 response = input("Continue with interactive visualization anyway? (y/N): ").strip().lower()
                 if response != 'y':
                     print("Skipping interactive visualization. Check the generated files:")
-                    print("   - trajectory_static.png (static visualization)")
-                    print("   - trajectory_animation.mp4 (animation)")
+                    print("   - output/trajectory_static.png (static visualization)")
+                    print("   - output/trajectory_animation.mp4 (animation)")
                     if args.topdown and not args.static_only:
-                        print("   - trajectory_animation_topdown.mp4 (top-down animation)")
+                        print("   - output/trajectory_animation_topdown.mp4 (top-down animation)")
                     return
             except KeyboardInterrupt:
                 print("\nSkipping interactive visualization.")
@@ -2884,10 +2884,10 @@ Examples:
             else:
                 print("This is common in WSL. The static visualization and animation files should still work.")
             print("Generated files:")
-            print("   - trajectory_static.png (static visualization)")
-            print("   - trajectory_animation.mp4 (animation)")
+            print("   - output/trajectory_static.png (static visualization)")
+            print("   - output/trajectory_animation.mp4 (animation)")
             if args.topdown and not args.static_only:
-                print("   - trajectory_animation_topdown.mp4 (top-down animation)")
+                print("   - output/trajectory_animation_topdown.mp4 (top-down animation)")
         
         print("Visualization complete!")
         

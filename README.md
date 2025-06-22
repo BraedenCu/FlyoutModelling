@@ -52,9 +52,9 @@ python sim_visualize_tracks.py --topdown
 
 This will:
 1. Load trajectory data from `input.json`
-2. Create a static visualization saved as `trajectory_static.png`
-3. Generate an animation saved as `trajectory_animation.mp4`
-4. Generate a top-down animation saved as `trajectory_animation_topdown.mp4` (when using `--topdown`)
+2. Create a static visualization saved as `output/trajectory_static.png`
+3. Generate an animation saved as `output/trajectory_animation.mp4`
+4. Generate a top-down animation saved as `output/trajectory_animation_topdown.mp4` (when using `--topdown`)
 5. Open an interactive 3D visualization window
 
 ### Visualization Modes
@@ -197,9 +197,9 @@ visualizer = TrajectoryVisualizer(topography_manager=topo_manager)
 
 ## Output Files
 
-- `trajectory_static.png`: Static 3D visualization image
-- `trajectory_animation.mp4`: Time-based animation video (3D perspective)
-- `trajectory_animation_topdown.mp4`: Time-based animation video (top-down view, generated with `--topdown` flag)
+- `output/trajectory_static.png`: Static 3D visualization image
+- `output/trajectory_animation.mp4`: Time-based animation video (3D perspective)
+- `output/trajectory_animation_topdown.mp4`: Time-based animation video (top-down view, generated with `--topdown` flag)
 - Interactive 3D window for real-time exploration
 
 ## Visualization Features
@@ -313,7 +313,7 @@ This will check your WSL setup and provide specific solutions.
    ```
 
 **Alternative solutions:**
-- Use the static visualization (`trajectory_static.png`) and animation (`trajectory_animation.mp4`) files
+- Use the static visualization (`output/trajectory_static.png`) and animation (`output/trajectory_animation.mp4`) files
 - Run the script on Windows directly (not WSL)
 - Use WSL2 with GPU passthrough (advanced setup)
 
