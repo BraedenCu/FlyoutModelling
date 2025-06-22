@@ -581,32 +581,35 @@ class TopographyManager:
             return X, Y, Z
     
     def _generate_synthetic_topography(self, X: np.ndarray, Y: np.ndarray) -> np.ndarray:
-        """Generate realistic synthetic topography with surface at z=0."""
+        """Generate realistic synthetic topography with surface starting at z=0."""
         Z = np.zeros_like(X)
-        # Base elevation (surface at z=0)
+        # Base elevation (surface starts at z=0)
         Z += 50 * np.sin(X / 100) * np.cos(Y / 100)
         # Add mountains
         mountain_centers = [(0, 0), (50, 50), (-30, 40)]
         for cx, cy in mountain_centers:
             dist = np.sqrt((X - cx)**2 + (Y - cy)**2)
             Z += 200 * np.exp(-dist**2 / (2 * 30**2))
-        # Add valleys
+        # Add gentle valleys (but keep them above z=0)
         valley_centers = [(20, -20), (-40, -30)]
         for cx, cy in valley_centers:
             dist = np.sqrt((X - cx)**2 + (Y - cy)**2)
-            Z -= 50 * np.exp(-dist**2 / (2 * 40**2))
+            Z -= 20 * np.exp(-dist**2 / (2 * 40**2))  # Very gentle valleys
         # Add noise for realism
         Z += np.random.normal(0, 2, X.shape)
+        # Ensure minimum elevation is at z=0 (ground surface)
+        Z = np.maximum(Z, 0)
         return Z
 
 class TrajectoryVisualizer:
     """Main visualization class for trajectory display."""
     
-    def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0), visualization_mode='auto'):
+    def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0), visualization_mode='auto', topology_offset: float = 300.0):
         """Initialize the trajectory visualizer."""
         self.topography_manager = topography_manager or TopographyManager(ref_origin=ref_origin)
         self.ref_origin = ref_origin
         self.visualization_mode = visualization_mode
+        self.topology_offset = topology_offset
         
         # Data storage
         self.trajectories = []
@@ -619,6 +622,7 @@ class TrajectoryVisualizer:
         # Visualization components
         self.plotter = None
         self.topography_mesh = None
+        self.backdrop_mesh = None
         self.animation_data = []
         
         # Register cleanup
@@ -909,7 +913,7 @@ class TrajectoryVisualizer:
         padding = 500  # 500 meters padding for real-world DEM data
         return (x_min - padding, x_max + padding, y_min - padding, y_max + padding)
     
-    def setup_topography(self, bounds: Tuple[float, float, float, float], satellite_path: str = None):
+    def setup_topography(self, bounds: Tuple[float, float, float, float], satellite_path: str = None, topology_offset: float = 300.0):
         """Setup topographic data for visualization with optional satellite overlay."""
         import numpy as np
         print("Setting up topography...")
@@ -985,27 +989,58 @@ class TrajectoryVisualizer:
             print("Error: Topography arrays must have the same shape")
             return
         
-        # Keep Z coordinates as-is (no offset) so 0,0,0 is on the surface
-        print(f"Creating topography mesh with shape: {X.shape} at surface level")
+        # Create a flat plane that extends forever as a backdrop
+        # Calculate extended bounds to ensure the plane covers the entire view
+        x_min, x_max, y_min, y_max = bounds
+        padding = max(x_max - x_min, y_max - y_min) * 3.0  # Large padding to extend beyond view
+        
+        # Create extended coordinates for a much larger plane
+        x_min_extended = x_min - padding
+        x_max_extended = x_max + padding
+        y_min_extended = y_min - padding
+        y_max_extended = y_max + padding
+        
+        # Use the topology offset to position the plane
+        surface_level = topology_offset
+        z_level = -surface_level  # Plane at negative z to be below objects at z=0
+        
+        print(f"Creating flat tan ground plane extending from ({x_min_extended:.1f}, {y_min_extended:.1f}) to ({x_max_extended:.1f}, {y_max_extended:.1f})")
+        print(f"Ground plane at z={z_level:.1f}m")
+        print(f"Objects at z=0 will appear {surface_level:.1f}m above the ground plane")
+        
+        # Create a simple large rectangular plane as backdrop
         import pyvista as pv
+        backdrop_plane = pv.Plane(
+            center=(0, 0, z_level),
+            direction=(0, 0, 1),
+            i_size=x_max_extended - x_min_extended,
+            j_size=y_max_extended - y_min_extended,
+            i_resolution=100,
+            j_resolution=100
+        )
+        
+        # Create the actual topography mesh
+        print(f"Creating topography mesh with shape: {X.shape}")
+        print(f"Original topography elevation range: {Z.min():.1f}m to {Z.max():.1f}m")
+        
+        # Shift the topography down using the provided topology offset
+        Z = Z - surface_level
+        print(f"Shifting topography down by {surface_level}m")
+        print(f"Adjusted topography elevation range: {Z.min():.1f}m to {Z.max():.1f}m")
+        
+        # Create topography mesh
         grid = pv.StructuredGrid()
         grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
         grid.dimensions = [X.shape[1], X.shape[0], 1]
         grid.point_data['elevation'] = Z.flatten()
-        tex_coords = None
-        if self.topography_manager.satellite_manager.satellite_texture is not None:
-            print("Adding satellite texture to topography mesh...")
-            tex_coords = self.topography_manager.satellite_manager.get_texture_coordinates(X, Y)
-            print(f"Texture coordinates shape: {tex_coords.shape}")
-        self.topography_mesh = grid
+        
+        # Create surface mesh from grid
         surface = grid.extract_surface()
         surface = surface.smooth(n_iter=10, relaxation_factor=0.1)
         surface.point_data['elevation'] = Z.flatten()
-        if tex_coords is not None:
-            surface.active_texture_coordinates = tex_coords.astype(np.float32)
-            print(f"Set texture coordinates on surface mesh")
-            print(f"Texture coordinates shape: {tex_coords.shape}")
-            print(f"Texture coordinates range: {tex_coords.min()} to {tex_coords.max()}")
+        
+        # Store both meshes - we'll render the backdrop first, then the topography on top
+        self.backdrop_mesh = backdrop_plane
         self.topography_mesh = surface
     
     def create_trajectory_meshes(self) -> Dict[int, pv.PolyData]:
@@ -1168,8 +1203,8 @@ class TrajectoryVisualizer:
         # Register plotter for cleanup
         register_cleanup(self.plotter)
         
-        # Set background
-        self.plotter.set_background('black')
+        # Set background to tan
+        self.plotter.set_background('tan')
         
         # Add coordinate axes
         self.plotter.add_axes(
@@ -1218,6 +1253,22 @@ class TrajectoryVisualizer:
         if self.topography_mesh is None:
             return
         
+        # First, add the backdrop plane if it exists
+        if hasattr(self, 'backdrop_mesh') and self.backdrop_mesh is not None:
+            print("Adding flat tan backdrop plane...")
+            self.plotter.add_mesh(
+                self.backdrop_mesh,
+                color='tan',  # Solid tan/sand color for backdrop
+                show_edges=False,
+                lighting=True,
+                ambient=0.3,
+                diffuse=0.7,
+                specular=0.2,
+                specular_power=15,
+                smooth_shading=True,
+                opacity=0.9
+            )
+        
         # Check if satellite texture is available
         if self.topography_manager.satellite_manager.satellite_texture is not None:
             print("Adding topography with satellite imagery overlay...")
@@ -1231,42 +1282,20 @@ class TrajectoryVisualizer:
                 opacity=1.0  # Full opacity for satellite imagery
             )
         else:
-            if self.visualization_mode == 'topography':
-                print("Adding topography with solid color...")
-                # Use solid color for topography mode
-                self.plotter.add_mesh(
-                    self.topography_mesh,
-                    color='tan',  # Solid tan/sand color
-                    show_edges=False,
-                    lighting=True,
-                    ambient=0.3,
-                    diffuse=0.7,
-                    specular=0.2,
-                    specular_power=15,
-                    smooth_shading=True,
-                    opacity=0.9
-                )
-            else:
-                print("Adding topography with elevation colormap...")
-                # Create custom colormap for topography
-                colors = ['darkgreen', 'forestgreen', 'yellow', 'orange', 'brown', 'white']
-                n_bins = 256
-                cmap = LinearSegmentedColormap.from_list('terrain', colors, N=n_bins)
-                
-                # Add topography mesh with elevation colormap
-                self.plotter.add_mesh(
-                    self.topography_mesh,
-                    scalars='elevation',
-                    cmap=cmap,
-                    show_edges=False,
-                    lighting=True,
-                    ambient=0.3,
-                    diffuse=0.7,
-                    specular=0.2,
-                    specular_power=15,
-                    smooth_shading=True,
-                    opacity=0.9
-                )
+            print("Adding topography with solid tan color...")
+            # Use solid tan color for topography to match the backdrop
+            self.plotter.add_mesh(
+                self.topography_mesh,
+                color='tan',  # Solid tan/sand color to match backdrop
+                show_edges=False,
+                lighting=True,
+                ambient=0.3,
+                diffuse=0.7,
+                specular=0.2,
+                specular_power=15,
+                smooth_shading=True,
+                opacity=0.9
+            )
     
     def add_trajectories_to_plot(self, trajectory_meshes: Dict[int, pv.PolyData]):
         """Add trajectory meshes to the visualization."""
@@ -1285,11 +1314,13 @@ class TrajectoryVisualizer:
             
             # Add velocity vectors
             if mesh_data['positions'].shape[0] > 0:
-                self.plotter.add_mesh(
-                    mesh_data['velocity_vectors'],
-                    color=color,
-                    opacity=0.8
-                )
+                # Only add velocity vectors if the mesh has points
+                if mesh_data['velocity_vectors'].n_points > 0:
+                    self.plotter.add_mesh(
+                        mesh_data['velocity_vectors'],
+                        color=color,
+                        opacity=1.0  # Increased from 0.8 to 1.0 (30% more opaque)
+                    )
             
             # Add trajectory ID label
             if mesh_data['positions'].shape[0] > 0:
@@ -1326,11 +1357,13 @@ class TrajectoryVisualizer:
             
             # Add velocity vectors
             if mesh_data['positions'].shape[0] > 0:
-                self.plotter.add_mesh(
-                    mesh_data['velocity_vectors'],
-                    color=color,
-                    opacity=0.8
-                )
+                # Only add velocity vectors if the mesh has points
+                if mesh_data['velocity_vectors'].n_points > 0:
+                    self.plotter.add_mesh(
+                        mesh_data['velocity_vectors'],
+                        color=color,
+                        opacity=1.0  # Increased from 0.8 to 1.0 (30% more opaque)
+                    )
             
             # Add missile ID label
             if mesh_data['positions'].shape[0] > 0:
@@ -1987,7 +2020,7 @@ class TrajectoryVisualizer:
         bounds = self.calculate_bounds()
         
         # Setup topography with optional satellite overlay
-        self.setup_topography(bounds, satellite_path)
+        self.setup_topography(bounds, satellite_path, self.topology_offset)
         
         # Setup visualization (off_screen if saving)
         self.setup_visualization(off_screen=bool(save_path))
@@ -2062,7 +2095,7 @@ class TrajectoryVisualizer:
         bounds = self.calculate_bounds()
         
         # Setup topography with optional satellite overlay
-        self.setup_topography(bounds, satellite_path)
+        self.setup_topography(bounds, satellite_path, self.topology_offset)
         
         # Setup visualization
         self.setup_visualization()
@@ -2178,7 +2211,7 @@ class TrajectoryVisualizer:
             self.plotter.add_mesh(
                 mesh,
                 color='red',
-                opacity=0.3,
+                opacity=0.6,  # Increased from 0.3 to 0.6 (30% more opaque)
                 show_edges=True,
                 edge_color='darkred',
                 line_width=2,
@@ -2308,7 +2341,7 @@ class TrajectoryVisualizer:
             self.plotter.add_mesh(
                 radar_sphere,
                 color='purple',  # Purple color for radar stations
-                opacity=0.8,
+                opacity=1.0,  # Increased from 0.8 to 1.0 (30% more opaque)
                 lighting=True,
                 ambient=0.6,
                 diffuse=0.4,
@@ -2374,6 +2407,12 @@ Examples:
         action='store_true',
         help='Skip animation generation and only create static visualization'
     )
+    parser.add_argument(
+        '--topology-offset',
+        type=float,
+        default=300.0,
+        help='Topography offset in meters - adjusts where the terrain surface appears relative to z=0 (default: 300.0, higher values = terrain appears lower)'
+    )
     
     args = parser.parse_args()
     
@@ -2390,7 +2429,7 @@ Examples:
         
         # Load reference location
         print("Loading reference LLA...")
-        visualizer = TrajectoryVisualizer(visualization_mode=args.mode)
+        visualizer = TrajectoryVisualizer(visualization_mode=args.mode, topology_offset=args.topology_offset)
         ref_origin = visualizer.load_reference_lla_from_json('input.json')
         
         # Load global time steps

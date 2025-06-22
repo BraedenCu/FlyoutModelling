@@ -81,6 +81,7 @@ Available options:
 - `--video-zoom FLOAT`: Camera zoom factor for video animations (default: 1.0, higher values = more zoomed in)
 - `--intermediate-frames INT`: Number of intermediate frames between global time steps (default: 4, higher values = smoother animation)
 - `--static-only`: Skip animation generation and only create static visualization
+- `--topology-offset FLOAT`: Topography offset in meters - adjusts where the terrain surface appears relative to z=0 (default: 300.0, higher values = terrain appears lower)
 
 ### Examples
 
@@ -96,6 +97,9 @@ python sim_visualize_tracks.py --mode auto --video-zoom 0.7 --intermediate-frame
 
 # Static-only mode - skip animation for faster processing
 python sim_visualize_tracks.py --mode topography --static-only --photo-zoom 1.5
+
+# Adjust terrain positioning - fine-tune where objects at z=0 appear relative to terrain
+python sim_visualize_tracks.py --mode topography --topology-offset 200 --photo-zoom 1.5
 ```
 
 ### Input Data Format
