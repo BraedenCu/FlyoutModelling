@@ -93,6 +93,7 @@ Available options:
 - `--static-only`: Skip animation generation and only create static visualization
 - `--topology-offset FLOAT`: Topography offset in meters - adjusts where the terrain surface appears relative to z=0 (default: 300.0, higher values = terrain appears lower)
 - `--topdown`: Generate both regular 3D video and top-down video (looking straight down from above)
+- `--scale-factor FLOAT`: Scale factor for all positions and velocities (default: 1.0, higher values = smaller scale, e.g., 10.0 = 1/10th size)
 
 ### Examples
 
@@ -117,6 +118,12 @@ python sim_visualize_tracks.py --topdown --video-zoom 1.2
 
 # Top-down view with satellite imagery and custom zoom
 python sim_visualize_tracks.py --mode satellite --topdown --video-zoom 1.5 --intermediate-frames 6
+
+# Scale everything down by 10x for smaller satellite imagery
+python sim_visualize_tracks.py --scale-factor 10 --mode satellite
+
+# Scale down by 5x and generate both videos
+python sim_visualize_tracks.py --scale-factor 5 --topdown --video-zoom 1.2
 ```
 
 ### Input Data Format
@@ -228,6 +235,13 @@ visualizer = TrajectoryVisualizer(topography_manager=topo_manager)
 - Shows X-Y plane projection (East-North coordinates)
 - Ideal for tactical analysis and path planning
 - Generated alongside regular 3D video with `--topdown` flag
+
+### Scale Factor
+- Scale all positions and velocities by a factor (e.g., `--scale-factor 10` = 1/10th size)
+- Useful for fitting large simulations into smaller satellite imagery areas
+- Affects trajectories, missiles, protected regions, and radar positions
+- Maintains proportional relationships between all elements
+- Collision detection automatically adjusts to scaled coordinates
 
 ### Interactive Controls
 - Mouse rotation, zoom, and pan
