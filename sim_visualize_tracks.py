@@ -2365,6 +2365,298 @@ class TrajectoryVisualizer:
                 shape_opacity=0.7
             )
 
+    def _setup_topdown_camera(self, video_zoom: float = 1.0):
+        """Setup camera position for top-down view (looking straight down from above)."""
+        # Calculate bounds including trajectories, protected regions, and topography
+        all_points = []
+        
+        # Add trajectory points
+        for trajectory in self.trajectories:
+            for point in trajectory.points:
+                all_points.append(point.position)
+        
+        # Add missile points
+        for missile in self.missiles:
+            for point in missile.points:
+                all_points.append(point.position)
+        
+        # Add protected region points (centroids and top points)
+        for region in self.protected_regions:
+            all_points.append(region.centroid)
+            # Add top point of cylinder
+            top_point = (region.centroid[0], region.centroid[1], region.height_limit)
+            all_points.append(top_point)
+            # Add points around the cylinder perimeter at different heights
+            for angle in np.linspace(0, 2*np.pi, 8):
+                x = region.centroid[0] + region.radius * np.cos(angle)
+                y = region.centroid[1] + region.radius * np.sin(angle)
+                all_points.append((x, y, 0))  # Base
+                all_points.append((x, y, region.height_limit))  # Top
+        
+        if all_points:
+            points_array = np.array(all_points)
+            center = points_array.mean(axis=0)
+            
+            # Calculate bounds
+            x_min, y_min, z_min = points_array.min(axis=0)
+            x_max, y_max, z_max = points_array.max(axis=0)
+            
+            # Calculate ranges
+            x_range = x_max - x_min
+            y_range = y_max - y_min
+            z_range = z_max - z_min
+            max_range = max(x_range, y_range, z_range)
+            
+            # Set camera position for top-down view
+            camera_distance = max_range * 0.6 / video_zoom  # Apply zoom factor
+            
+            # Position camera directly above the center, looking straight down
+            camera_pos = (
+                center[0],  # Same X as center
+                center[1],  # Same Y as center  
+                center[2] + camera_distance  # Above the scene
+            )
+            
+            self.plotter.camera_position = [
+                camera_pos,
+                center,  # Look at center
+                (0, 1, 0)  # Up vector pointing North (Y-axis)
+            ]
+            
+            # Apply additional zoom factor
+            self.plotter.camera.zoom(video_zoom)
+            print(f"Top-down camera set with zoom factor: {video_zoom}")
+        else:
+            # Fallback camera position for top-down
+            self.plotter.camera_position = 'xy'  # Top-down preset
+            self.plotter.camera.zoom(video_zoom)
+
+    def animate_trajectories_topdown(self, trajectory_meshes: Dict[int, pv.PolyData], 
+                                   missile_meshes: Dict[int, pv.PolyData] = None,
+                                   fps: int = 10, save_path: str = None, video_zoom: float = 1.0,
+                                   intermediate_frames: int = 4):
+        """Create a top-down animation of the trajectories and missiles."""
+        if not self.animation_data:
+            self.create_animation_data(trajectory_meshes, missile_meshes, intermediate_frames)
+        
+        print(f"Creating top-down animation with {len(self.animation_data)} frames...")
+        
+        # Create temporary directory for frames
+        with tempfile.TemporaryDirectory() as temp_dir:
+            frame_paths = []
+            
+            # Use off_screen plotter for animation
+            self.setup_visualization(off_screen=True)
+            
+            # Add static elements once (topography, protected regions, collision markers)
+            print("Adding static elements for top-down view...")
+            self.add_topography_to_plot()
+            
+            # Create protected region meshes for animation
+            protected_region_meshes = {}
+            if self.protected_regions:
+                protected_region_meshes = self.create_protected_region_meshes()
+                self.add_protected_regions_to_plot(protected_region_meshes)
+            
+            # Add collision markers (static throughout animation)
+            self.add_collision_markers_to_plot()
+            
+            # Calculate optimal camera position for top-down view
+            self._setup_topdown_camera(video_zoom)
+            
+            # Track dynamic actors to clear each frame
+            dynamic_actors = []
+            
+            for i, frame_data in enumerate(self.animation_data):
+                # Clear only dynamic actors from previous frame
+                for actor in dynamic_actors:
+                    self.plotter.remove_actor(actor)
+                dynamic_actors.clear()
+                
+                # Add coordinate axes for top-down view (only X and Y axes visible)
+                axes_actor = self.plotter.add_axes(
+                    xlabel='East (m)', 
+                    ylabel='North (m)', 
+                    zlabel='',  # Hide Z-axis label for top-down view
+                    line_width=2,
+                    labels_off=False
+                )
+                dynamic_actors.append(axes_actor)
+                
+                # Add time display (dynamic - changes each frame)
+                time_actor = self.plotter.add_text(
+                    f"Time: {frame_data['time']:.2f}s",
+                    position='upper_left',
+                    font_size=20,
+                    color='white'
+                )
+                dynamic_actors.append(time_actor)
+                
+                # Add active trajectories for this frame
+                for trajectory_info in frame_data['active_trajectories']:
+                    trajectory_id = trajectory_info['id']
+                    current_position = trajectory_info['current_position']
+                    current_velocity = trajectory_info['current_velocity']
+                    trail_positions = trajectory_info['trail_positions']
+                    
+                    # Check if this trajectory has been intercepted
+                    trajectory_intercepted = False
+                    for collision in self.collision_events:
+                        if trajectory_id in collision.participants and frame_data['time'] >= collision.time:
+                            trajectory_intercepted = True
+                            break
+                    
+                    # Choose color based on interception status
+                    if trajectory_intercepted:
+                        color = 'green'  # Intercepted trajectories are green
+                    else:
+                        color = 'blue'   # Normal trajectories are blue
+                    
+                    # Create trail line
+                    if len(trail_positions) > 1:
+                        trail_points = np.array(trail_positions)
+                        trail_line = pv.lines_from_points(trail_points)
+                        
+                        # Add trail with fading opacity
+                        trail_actor = self.plotter.add_mesh(
+                            trail_line,
+                            color=color,
+                            line_width=8,  # Same as missiles
+                            opacity=0.8,
+                            render_lines_as_tubes=True
+                        )
+                        dynamic_actors.append(trail_actor)
+                    
+                    # Add velocity vector (arrow head) for current position
+                    if np.linalg.norm(current_velocity) > 0:
+                        vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                        arrow = pv.Arrow(
+                            start=current_position,
+                            direction=vel_norm,
+                            scale=12.0,  # Same as missiles
+                            tip_length=0.4,
+                            tip_radius=0.3,
+                            shaft_radius=0.15
+                        )
+                        
+                        vector_actor = self.plotter.add_mesh(
+                            arrow,
+                            color=color,
+                            opacity=0.9
+                        )
+                        dynamic_actors.append(vector_actor)
+                
+                # Add active missiles for this frame
+                for missile_info in frame_data['active_missiles']:
+                    missile_id = missile_info['id']
+                    current_position = missile_info['current_position']
+                    current_velocity = missile_info['current_velocity']
+                    trail_positions = missile_info['trail_positions']
+                    
+                    # Check if this missile has intercepted a trajectory
+                    missile_intercepted = False
+                    for collision in self.collision_events:
+                        if missile_id in collision.participants and frame_data['time'] >= collision.time:
+                            missile_intercepted = True
+                            break
+                    
+                    # Choose color based on interception status
+                    if missile_intercepted:
+                        color = 'green'  # Intercepted missiles are green
+                    else:
+                        color = 'orange'  # Normal missiles are orange
+                    
+                    # Create trail line for missile
+                    if len(trail_positions) > 1:
+                        trail_points = np.array(trail_positions)
+                        trail_line = pv.lines_from_points(trail_points)
+                        
+                        # Add missile trail with fading opacity
+                        trail_actor = self.plotter.add_mesh(
+                            trail_line,
+                            color=color,
+                            line_width=8,
+                            opacity=0.8,
+                            render_lines_as_tubes=True
+                        )
+                        dynamic_actors.append(trail_actor)
+                    
+                    # Add velocity vector (arrow head) for current missile position
+                    if np.linalg.norm(current_velocity) > 0:
+                        vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                        arrow = pv.Arrow(
+                            start=current_position,
+                            direction=vel_norm,
+                            scale=12.0,  # Same as trajectories
+                            tip_length=0.4,
+                            tip_radius=0.3,
+                            shaft_radius=0.15
+                        )
+                        
+                        vector_actor = self.plotter.add_mesh(
+                            arrow,
+                            color=color,
+                            opacity=0.9
+                        )
+                        dynamic_actors.append(vector_actor)
+                
+                # Add explosion effects for this frame
+                for explosion_info in frame_data['explosions']:
+                    position = explosion_info['position']
+                    radius = explosion_info['radius']
+                    time_factor = explosion_info['time_factor']
+                    participants = explosion_info['participants']
+                    
+                    # Create explosion mesh
+                    explosion_mesh = self.create_explosion_mesh(position, radius, time_factor)
+                    
+                    # Add explosion to plot with dynamic color and opacity
+                    explosion_color = 'yellow' if time_factor > 0.5 else 'orange'
+                    explosion_opacity = min(0.9, time_factor * 2)  # Fade out over time
+                    
+                    explosion_actor = self.plotter.add_mesh(
+                        explosion_mesh,
+                        color=explosion_color,
+                        opacity=explosion_opacity,
+                        show_edges=False,
+                        lighting=True,
+                        ambient=0.8,
+                        diffuse=0.2
+                    )
+                    dynamic_actors.append(explosion_actor)
+                
+                # Add legend for top-down view
+                legend_text = f"Top-Down Animation Frame {i+1}/{len(self.animation_data)}\nBlue: Trajectories\nOrange: Missiles"
+                if self.collision_events:
+                    legend_text += "\nGreen: Intercepted Objects"
+                if self.protected_regions:
+                    legend_text += "\nRed Cylinders: Protected Regions"
+                legend_text += "\nView: Looking Down from Above"
+                
+                legend_actor = self.plotter.add_text(
+                    legend_text,
+                    position='upper_right',
+                    font_size=16,
+                    color='white'
+                )
+                dynamic_actors.append(legend_actor)
+                
+                # Save frame
+                frame_path = os.path.join(temp_dir, f'frame_{i:04d}.png')
+                self.plotter.screenshot(frame_path, window_size=(1920, 1080))
+                frame_paths.append(frame_path)
+                
+                if (i + 1) % 10 == 0:
+                    print(f"  Generated frame {i+1}/{len(self.animation_data)}")
+            
+            # Create video from frames
+            if save_path:
+                print(f"Creating top-down video: {save_path}")
+                self._create_video_from_frames(frame_paths, save_path, fps)
+                print(f"Top-down animation saved to: {save_path}")
+            else:
+                print("Top-down animation frames generated (no save path specified)")
+
 def main():
     """Main function to run the trajectory visualization suite."""
     # Parse command line arguments
@@ -2376,6 +2668,8 @@ Examples:
   python sim_visualize_tracks.py --mode satellite    # Use satellite imagery
   python sim_visualize_tracks.py --mode topography   # Use topographic map
   python sim_visualize_tracks.py --mode auto         # Auto-detect (default)
+  python sim_visualize_tracks.py --topdown           # Generate both 3D and top-down videos
+  python sim_visualize_tracks.py --topdown --video-zoom 1.5  # Top-down with zoom
         """
     )
     parser.add_argument(
@@ -2412,6 +2706,11 @@ Examples:
         type=float,
         default=300.0,
         help='Topography offset in meters - adjusts where the terrain surface appears relative to z=0 (default: 300.0, higher values = terrain appears lower)'
+    )
+    parser.add_argument(
+        '--topdown',
+        action='store_true',
+        help='Generate both regular 3D video and top-down video (looking straight down from above)'
     )
     
     args = parser.parse_args()
@@ -2554,6 +2853,11 @@ Examples:
             trajectory_meshes = visualizer.create_trajectory_meshes()
             missile_meshes = visualizer.create_missile_meshes()
             visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4', video_zoom=args.video_zoom, intermediate_frames=args.intermediate_frames)
+            
+            # Create top-down animation if requested
+            if args.topdown:
+                print("Creating top-down animation...")
+                visualizer.animate_trajectories_topdown(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation_topdown.mp4', video_zoom=args.video_zoom, intermediate_frames=args.intermediate_frames)
         else:
             print("Skipping animation generation (static-only mode)")
         
@@ -2573,6 +2877,8 @@ Examples:
                     print("Skipping interactive visualization. Check the generated files:")
                     print("   - trajectory_static.png (static visualization)")
                     print("   - trajectory_animation.mp4 (animation)")
+                    if args.topdown and not args.static_only:
+                        print("   - trajectory_animation_topdown.mp4 (top-down animation)")
                     return
             except KeyboardInterrupt:
                 print("\nSkipping interactive visualization.")
@@ -2605,6 +2911,8 @@ Examples:
             print("Generated files:")
             print("   - trajectory_static.png (static visualization)")
             print("   - trajectory_animation.mp4 (animation)")
+            if args.topdown and not args.static_only:
+                print("   - trajectory_animation_topdown.mp4 (top-down animation)")
         
         print("Visualization complete!")
         
