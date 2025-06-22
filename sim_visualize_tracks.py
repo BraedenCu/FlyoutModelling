@@ -25,6 +25,7 @@ import subprocess
 import signal
 import sys
 import atexit
+import argparse
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore")
@@ -161,6 +162,14 @@ class CollisionEvent:
     participants: List[int]  # IDs of colliding objects
     explosion_duration: float = 2.0  # Duration of explosion animation in seconds
     explosion_radius: float = 10.0  # Maximum radius of explosion effect
+
+@dataclass
+class Radar:
+    """Represents a radar station."""
+    id: int
+    emplacement: Tuple[float, float, float]  # ENU coordinates (x, y, z)
+    type: str  # Type of resource (e.g., "radar")
+    description: str  # Descriptive name
 
 class SatelliteImageryManager:
     """Manages satellite imagery overlay for topography visualization."""
@@ -572,44 +581,51 @@ class TopographyManager:
             return X, Y, Z
     
     def _generate_synthetic_topography(self, X: np.ndarray, Y: np.ndarray) -> np.ndarray:
-        """Generate realistic synthetic topography with multiple features."""
+        """Generate realistic synthetic topography with surface starting at z=0."""
         Z = np.zeros_like(X)
-        # Base elevation
-        Z += 100 + 50 * np.sin(X / 100) * np.cos(Y / 100)
+        # Base elevation (surface starts at z=0)
+        Z += 50 * np.sin(X / 100) * np.cos(Y / 100)
         # Add mountains
         mountain_centers = [(0, 0), (50, 50), (-30, 40)]
         for cx, cy in mountain_centers:
             dist = np.sqrt((X - cx)**2 + (Y - cy)**2)
             Z += 200 * np.exp(-dist**2 / (2 * 30**2))
-        # Add valleys
+        # Add gentle valleys (but keep them above z=0)
         valley_centers = [(20, -20), (-40, -30)]
         for cx, cy in valley_centers:
             dist = np.sqrt((X - cx)**2 + (Y - cy)**2)
-            Z -= 50 * np.exp(-dist**2 / (2 * 40**2))
+            Z -= 20 * np.exp(-dist**2 / (2 * 40**2))  # Very gentle valleys
         # Add noise for realism
         Z += np.random.normal(0, 2, X.shape)
+        # Ensure minimum elevation is at z=0 (ground surface)
+        Z = np.maximum(Z, 0)
         return Z
 
 class TrajectoryVisualizer:
     """Main visualization class for trajectory display."""
     
-    def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0)):
+    def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0), visualization_mode='auto', topology_offset: float = 300.0):
         """Initialize the trajectory visualizer."""
+        self.topography_manager = topography_manager or TopographyManager(ref_origin=ref_origin)
+        self.ref_origin = ref_origin
+        self.visualization_mode = visualization_mode
+        self.topology_offset = topology_offset
+        
+        # Data storage
         self.trajectories = []
-        self.missiles = []
         self.protected_regions = []
+        self.missiles = []
+        self.radars = []
         self.collision_events = []
+        self.global_time_steps = []
+        
+        # Visualization components
         self.plotter = None
         self.topography_mesh = None
+        self.backdrop_mesh = None
         self.animation_data = []
         
-        # Initialize topography manager
-        if topography_manager is None:
-            self.topography_manager = TopographyManager(ref_origin=ref_origin)
-        else:
-            self.topography_manager = topography_manager
-        
-        # Register cleanup for graceful exit
+        # Register cleanup
         register_cleanup()
     
     def close(self):
@@ -673,26 +689,64 @@ class TrajectoryVisualizer:
     
     def load_missiles_from_json(self, json_file: str) -> List[Missile]:
         """Load missile data from JSON file."""
-        with open(json_file, 'r') as f:
-            data = json.load(f)
-        
-        missiles = []
-        if 'missile_history' in data:
-            for missile_data in data['missile_history']:
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            
+            missiles = []
+            missile_history = data.get('missile_history', [])
+            
+            for missile_data in missile_history:
+                missile_id = missile_data['id']
                 points = []
-                for point_data in missile_data['timesteps']:
+                
+                for timestep in missile_data['timesteps']:
                     point = TrajectoryPoint(
-                        time=point_data['time'],
-                        position=tuple(point_data['position']),
-                        velocity=tuple(point_data['velocity'])
+                        time=timestep['time'],
+                        position=tuple(timestep['position']),
+                        velocity=tuple(timestep['velocity'])
                     )
                     points.append(point)
                 
-                missile = Missile(id=missile_data['id'], points=points)
+                missile = Missile(id=missile_id, points=points)
                 missiles.append(missile)
-        
-        self.missiles = missiles
-        return missiles
+            
+            self.missiles = missiles
+            print(f"Loaded {len(missiles)} missiles")
+            return missiles
+            
+        except Exception as e:
+            print(f"Error loading missiles: {e}")
+            self.missiles = []
+            return []
+
+    def load_radars_from_json(self, json_file: str) -> List[Radar]:
+        """Load radar data from JSON file."""
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            
+            radars = []
+            resources = data.get('resources', [])
+            
+            for resource_data in resources:
+                if resource_data.get('type') == 'radar':
+                    radar = Radar(
+                        id=resource_data['id'],
+                        emplacement=tuple(resource_data['emplacement']),
+                        type=resource_data['type'],
+                        description=resource_data['description']
+                    )
+                    radars.append(radar)
+            
+            self.radars = radars
+            print(f"Loaded {len(radars)} radar stations")
+            return radars
+            
+        except Exception as e:
+            print(f"Error loading radars: {e}")
+            self.radars = []
+            return []
     
     def detect_collisions(self, collision_threshold: float = 5.0) -> List[CollisionEvent]:
         """Detect collisions between trajectories and missiles."""
@@ -788,30 +842,51 @@ class TrajectoryVisualizer:
     
     def load_reference_lla_from_json(self, json_file: str) -> Tuple[float, float, float]:
         """Load reference latitude, longitude, altitude from JSON file."""
-        with open(json_file, 'r') as f:
-            data = json.load(f)
-        
-        if 'reference_lla' in data:
-            ref_data = data['reference_lla']
-            ref_lla = (
-                ref_data['latitude'],
-                ref_data['longitude'], 
-                ref_data['altitude']
-            )
-            self.ref_origin = ref_lla
-            # Update topography manager with new reference
-            if self.topography_manager:
-                self.topography_manager.ref_origin = ref_lla
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            
+            ref_data = data.get('reference_lla', {})
+            lat = ref_data.get('latitude', 0.0)
+            lon = ref_data.get('longitude', 0.0)
+            alt = ref_data.get('altitude', 0.0)
+            description = ref_data.get('description', 'Unknown location')
+            
+            print(f"Loaded reference LLA: ({lat}, {lon}, {alt})")
+            print(f"Reference location: {description}")
+            
+            # Update the reference origin in the topography manager
+            self.ref_origin = (lat, lon, alt)
+            if hasattr(self.topography_manager, 'ref_origin'):
+                self.topography_manager.ref_origin = (lat, lon, alt)
                 self.topography_manager._setup_transformers()
             
-            print(f"Loaded reference LLA: {ref_lla}")
-            if 'description' in ref_data:
-                print(f"Reference location: {ref_data['description']}")
+            return (lat, lon, alt)
             
-            return ref_lla
-        else:
-            print("No reference_lla found in JSON, using default (0, 0, 0)")
-            return self.ref_origin
+        except Exception as e:
+            print(f"Error loading reference LLA: {e}")
+            return (0.0, 0.0, 0.0)
+    
+    def load_time_steps_from_json(self, json_file: str) -> List[float]:
+        """Load global time steps from JSON file."""
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            
+            time_steps = data.get('time_steps', [])
+            if time_steps:
+                print(f"Loaded {len(time_steps)} global time steps: {time_steps}")
+                self.global_time_steps = time_steps
+            else:
+                print("No global time_steps found in JSON, will use trajectory-based timing")
+                self.global_time_steps = []
+            
+            return time_steps
+            
+        except Exception as e:
+            print(f"Error loading time steps: {e}")
+            self.global_time_steps = []
+            return []
     
     def calculate_bounds(self) -> Tuple[float, float, float, float]:
         """Calculate the bounding box for all trajectories and missiles."""
@@ -838,8 +913,9 @@ class TrajectoryVisualizer:
         padding = 500  # 500 meters padding for real-world DEM data
         return (x_min - padding, x_max + padding, y_min - padding, y_max + padding)
     
-    def setup_topography(self, bounds: Tuple[float, float, float, float], satellite_path: str = None):
+    def setup_topography(self, bounds: Tuple[float, float, float, float], satellite_path: str = None, topology_offset: float = 300.0):
         """Setup topographic data for visualization with optional satellite overlay."""
+        import numpy as np
         print("Setting up topography...")
         
         # If satellite imagery is provided, use a flat mesh matching the simulation bounds
@@ -880,8 +956,8 @@ class TrajectoryVisualizer:
                 x_coords = np.linspace(x_min, x_max, img_width)
                 y_coords = np.linspace(y_min, y_max, img_height)
                 X, Y = np.meshgrid(x_coords, y_coords)
-                Z = np.zeros_like(X)
-                print(f"Created flat surface with shape: {X.shape} covering bounds: {bounds}")
+                Z = np.zeros_like(X)  # Surface at z=0
+                print(f"Created flat surface with shape: {X.shape} covering bounds: {bounds} at altitude 0m")
                 # Create PyVista mesh
                 import pyvista as pv
                 grid = pv.StructuredGrid()
@@ -912,26 +988,59 @@ class TrajectoryVisualizer:
         if X.shape != Y.shape or Y.shape != Z.shape:
             print("Error: Topography arrays must have the same shape")
             return
-        print(f"Creating topography mesh with shape: {X.shape}")
+        
+        # Create a flat plane that extends forever as a backdrop
+        # Calculate extended bounds to ensure the plane covers the entire view
+        x_min, x_max, y_min, y_max = bounds
+        padding = max(x_max - x_min, y_max - y_min) * 3.0  # Large padding to extend beyond view
+        
+        # Create extended coordinates for a much larger plane
+        x_min_extended = x_min - padding
+        x_max_extended = x_max + padding
+        y_min_extended = y_min - padding
+        y_max_extended = y_max + padding
+        
+        # Use the topology offset to position the plane
+        surface_level = topology_offset
+        z_level = -surface_level  # Plane at negative z to be below objects at z=0
+        
+        print(f"Creating flat tan ground plane extending from ({x_min_extended:.1f}, {y_min_extended:.1f}) to ({x_max_extended:.1f}, {y_max_extended:.1f})")
+        print(f"Ground plane at z={z_level:.1f}m")
+        print(f"Objects at z=0 will appear {surface_level:.1f}m above the ground plane")
+        
+        # Create a simple large rectangular plane as backdrop
         import pyvista as pv
+        backdrop_plane = pv.Plane(
+            center=(0, 0, z_level),
+            direction=(0, 0, 1),
+            i_size=x_max_extended - x_min_extended,
+            j_size=y_max_extended - y_min_extended,
+            i_resolution=100,
+            j_resolution=100
+        )
+        
+        # Create the actual topography mesh
+        print(f"Creating topography mesh with shape: {X.shape}")
+        print(f"Original topography elevation range: {Z.min():.1f}m to {Z.max():.1f}m")
+        
+        # Shift the topography down using the provided topology offset
+        Z = Z - surface_level
+        print(f"Shifting topography down by {surface_level}m")
+        print(f"Adjusted topography elevation range: {Z.min():.1f}m to {Z.max():.1f}m")
+        
+        # Create topography mesh
         grid = pv.StructuredGrid()
         grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
         grid.dimensions = [X.shape[1], X.shape[0], 1]
         grid.point_data['elevation'] = Z.flatten()
-        tex_coords = None
-        if self.topography_manager.satellite_manager.satellite_texture is not None:
-            print("Adding satellite texture to topography mesh...")
-            tex_coords = self.topography_manager.satellite_manager.get_texture_coordinates(X, Y)
-            print(f"Texture coordinates shape: {tex_coords.shape}")
-        self.topography_mesh = grid
+        
+        # Create surface mesh from grid
         surface = grid.extract_surface()
         surface = surface.smooth(n_iter=10, relaxation_factor=0.1)
         surface.point_data['elevation'] = Z.flatten()
-        if tex_coords is not None:
-            surface.active_texture_coordinates = tex_coords.astype(np.float32)
-            print(f"Set texture coordinates on surface mesh")
-            print(f"Texture coordinates shape: {tex_coords.shape}")
-            print(f"Texture coordinates range: {tex_coords.min()} to {tex_coords.max()}")
+        
+        # Store both meshes - we'll render the backdrop first, then the topography on top
+        self.backdrop_mesh = backdrop_plane
         self.topography_mesh = surface
     
     def create_trajectory_meshes(self) -> Dict[int, pv.PolyData]:
@@ -1094,8 +1203,8 @@ class TrajectoryVisualizer:
         # Register plotter for cleanup
         register_cleanup(self.plotter)
         
-        # Set background
-        self.plotter.set_background('black')
+        # Set background to tan
+        self.plotter.set_background('tan')
         
         # Add coordinate axes
         self.plotter.add_axes(
@@ -1144,6 +1253,22 @@ class TrajectoryVisualizer:
         if self.topography_mesh is None:
             return
         
+        # First, add the backdrop plane if it exists
+        if hasattr(self, 'backdrop_mesh') and self.backdrop_mesh is not None:
+            print("Adding flat tan backdrop plane...")
+            self.plotter.add_mesh(
+                self.backdrop_mesh,
+                color='tan',  # Solid tan/sand color for backdrop
+                show_edges=False,
+                lighting=True,
+                ambient=0.3,
+                diffuse=0.7,
+                specular=0.2,
+                specular_power=15,
+                smooth_shading=True,
+                opacity=0.9
+            )
+        
         # Check if satellite texture is available
         if self.topography_manager.satellite_manager.satellite_texture is not None:
             print("Adding topography with satellite imagery overlay...")
@@ -1157,17 +1282,11 @@ class TrajectoryVisualizer:
                 opacity=1.0  # Full opacity for satellite imagery
             )
         else:
-            print("Adding topography with elevation colormap...")
-            # Create custom colormap for topography
-            colors = ['darkgreen', 'forestgreen', 'yellow', 'orange', 'brown', 'white']
-            n_bins = 256
-            cmap = LinearSegmentedColormap.from_list('terrain', colors, N=n_bins)
-            
-            # Add topography mesh with elevation colormap
+            print("Adding topography with solid tan color...")
+            # Use solid tan color for topography to match the backdrop
             self.plotter.add_mesh(
                 self.topography_mesh,
-                scalars='elevation',
-                cmap=cmap,
+                color='tan',  # Solid tan/sand color to match backdrop
                 show_edges=False,
                 lighting=True,
                 ambient=0.3,
@@ -1180,28 +1299,28 @@ class TrajectoryVisualizer:
     
     def add_trajectories_to_plot(self, trajectory_meshes: Dict[int, pv.PolyData]):
         """Add trajectory meshes to the visualization."""
-        # Color palette for different trajectories
-        colors = ['red', 'blue', 'green', 'yellow', 'cyan', 'magenta', 'orange', 'purple']
+        # Use blue color for all trajectories
+        color = 'blue'
         
-        for i, (trajectory_id, mesh_data) in enumerate(trajectory_meshes.items()):
-            color = colors[i % len(colors)]
-            
-            # Add trajectory line as thick tube for better visibility
-            tube = mesh_data['line'].tube(radius=3.0)  # Increased from 0.5 to 3.0
+        for trajectory_id, mesh_data in trajectory_meshes.items():
+            # Add trajectory line as thick tube for better visibility (same size as missiles)
+            tube = mesh_data['line'].tube(radius=15.0)  # Same as missiles
             self.plotter.add_mesh(
                 tube,
                 color=color,
-                line_width=10,  # Increased from 4 to 10
+                line_width=30,  # Same as missiles
                 show_scalar_bar=False
             )
             
             # Add velocity vectors
             if mesh_data['positions'].shape[0] > 0:
-                self.plotter.add_mesh(
-                    mesh_data['velocity_vectors'],
-                    color=color,
-                    opacity=0.8
-                )
+                # Only add velocity vectors if the mesh has points
+                if mesh_data['velocity_vectors'].n_points > 0:
+                    self.plotter.add_mesh(
+                        mesh_data['velocity_vectors'],
+                        color=color,
+                        opacity=1.0  # Increased from 0.8 to 1.0 (30% more opaque)
+                    )
             
             # Add trajectory ID label
             if mesh_data['positions'].shape[0] > 0:
@@ -1238,11 +1357,13 @@ class TrajectoryVisualizer:
             
             # Add velocity vectors
             if mesh_data['positions'].shape[0] > 0:
-                self.plotter.add_mesh(
-                    mesh_data['velocity_vectors'],
-                    color=color,
-                    opacity=0.8
-                )
+                # Only add velocity vectors if the mesh has points
+                if mesh_data['velocity_vectors'].n_points > 0:
+                    self.plotter.add_mesh(
+                        mesh_data['velocity_vectors'],
+                        color=color,
+                        opacity=1.0  # Increased from 0.8 to 1.0 (30% more opaque)
+                    )
             
             # Add missile ID label
             if mesh_data['positions'].shape[0] > 0:
@@ -1256,18 +1377,34 @@ class TrajectoryVisualizer:
                 )
     
     def create_animation_data(self, trajectory_meshes: Dict[int, pv.PolyData], 
-                            missile_meshes: Dict[int, pv.PolyData] = None):
-        """Prepare data for animation."""
+                            missile_meshes: Dict[int, pv.PolyData] = None,
+                            intermediate_frames: int = 4):
+        """Prepare data for animation with trails and interpolation."""
         self.animation_data = []
         
-        # Get all unique timestamps from trajectories and missiles
-        all_times = set()
-        for mesh_data in trajectory_meshes.values():
-            all_times.update(mesh_data['times'])
-        
-        if missile_meshes:
-            for mesh_data in missile_meshes.values():
+        # Use global time steps if available, otherwise extract from trajectories
+        if self.global_time_steps:
+            print(f"Using global time steps for animation: {self.global_time_steps}")
+            # Create intermediate frames for smoother animation
+            all_times = set()
+            for i in range(len(self.global_time_steps) - 1):
+                t1, t2 = self.global_time_steps[i], self.global_time_steps[i + 1]
+                # Add intermediate frames between each global time step
+                for j in range(intermediate_frames + 1):
+                    intermediate_time = t1 + j * (t2 - t1) / intermediate_frames
+                    all_times.add(intermediate_time)
+            # Add the last global time step
+            all_times.add(self.global_time_steps[-1])
+        else:
+            print("Using trajectory-based time steps for animation")
+            # Get all unique timestamps from trajectories and missiles
+            all_times = set()
+            for mesh_data in trajectory_meshes.values():
                 all_times.update(mesh_data['times'])
+            
+            if missile_meshes:
+                for mesh_data in missile_meshes.values():
+                    all_times.update(mesh_data['times'])
         
         # Add collision event times
         for event in self.collision_events:
@@ -1277,8 +1414,42 @@ class TrajectoryVisualizer:
                 all_times.add(t)
         
         sorted_times = sorted(all_times)
+        print(f"Animation will have {len(sorted_times)} frames at times: {sorted_times}")
         
-        for time in sorted_times:
+        # Create trajectory and missile data structures for interpolation
+        trajectory_data = {}
+        missile_data = {}
+        
+        # Process trajectory data
+        for trajectory_id, mesh_data in trajectory_meshes.items():
+            times = mesh_data['times']
+            positions = mesh_data['positions']
+            velocities = mesh_data['velocities']
+            
+            trajectory_data[trajectory_id] = {
+                'times': times,
+                'positions': positions,
+                'velocities': velocities,
+                'trail_positions': [],  # Will be built progressively
+                'trail_velocities': []  # Will be built progressively
+            }
+        
+        # Process missile data
+        if missile_meshes:
+            for missile_id, mesh_data in missile_meshes.items():
+                times = mesh_data['times']
+                positions = mesh_data['positions']
+                velocities = mesh_data['velocities']
+                
+                missile_data[missile_id] = {
+                    'times': times,
+                    'positions': positions,
+                    'velocities': velocities,
+                    'trail_positions': [],  # Will be built progressively
+                    'trail_velocities': []  # Will be built progressively
+                }
+        
+        for i, time in enumerate(sorted_times):
             frame_data = {
                 'time': time, 
                 'active_trajectories': [], 
@@ -1286,36 +1457,65 @@ class TrajectoryVisualizer:
                 'explosions': []
             }
             
-            # Add trajectory data for this time
-            for trajectory_id, mesh_data in trajectory_meshes.items():
-                # Find points at this time
-                time_indices = np.where(np.isclose(mesh_data['times'], time))[0]
+            # Process trajectory data for this frame
+            for trajectory_id, data in trajectory_data.items():
+                # Find the current position and velocity at this time
+                current_pos = None
+                current_vel = None
                 
+                # Check if we have exact time match
+                time_indices = np.where(np.isclose(data['times'], time))[0]
                 if len(time_indices) > 0:
-                    positions = mesh_data['positions'][time_indices]
-                    velocities = mesh_data['velocities'][time_indices]
+                    current_pos = data['positions'][time_indices[0]]
+                    current_vel = data['velocities'][time_indices[0]]
+                else:
+                    # Interpolate between waypoints
+                    current_pos, current_vel = self._interpolate_position_velocity(
+                        data['times'], data['positions'], data['velocities'], time
+                    )
+                
+                if current_pos is not None:
+                    # Add to trail
+                    data['trail_positions'].append(current_pos)
+                    data['trail_velocities'].append(current_vel)
                     
                     frame_data['active_trajectories'].append({
                         'id': trajectory_id,
-                        'positions': positions,
-                        'velocities': velocities
+                        'current_position': current_pos,
+                        'current_velocity': current_vel,
+                        'trail_positions': data['trail_positions'].copy(),
+                        'trail_velocities': data['trail_velocities'].copy()
                     })
             
-            # Add missile data for this time
-            if missile_meshes:
-                for missile_id, mesh_data in missile_meshes.items():
-                    # Find points at this time
-                    time_indices = np.where(np.isclose(mesh_data['times'], time))[0]
+            # Process missile data for this frame
+            for missile_id, data in missile_data.items():
+                # Find the current position and velocity at this time
+                current_pos = None
+                current_vel = None
+                
+                # Check if we have exact time match
+                time_indices = np.where(np.isclose(data['times'], time))[0]
+                if len(time_indices) > 0:
+                    current_pos = data['positions'][time_indices[0]]
+                    current_vel = data['velocities'][time_indices[0]]
+                else:
+                    # Interpolate between waypoints
+                    current_pos, current_vel = self._interpolate_position_velocity(
+                        data['times'], data['positions'], data['velocities'], time
+                    )
+                
+                if current_pos is not None:
+                    # Add to trail
+                    data['trail_positions'].append(current_pos)
+                    data['trail_velocities'].append(current_vel)
                     
-                    if len(time_indices) > 0:
-                        positions = mesh_data['positions'][time_indices]
-                        velocities = mesh_data['velocities'][time_indices]
-                        
-                        frame_data['active_missiles'].append({
-                            'id': missile_id,
-                            'positions': positions,
-                            'velocities': velocities
-                        })
+                    frame_data['active_missiles'].append({
+                        'id': missile_id,
+                        'current_position': current_pos,
+                        'current_velocity': current_vel,
+                        'trail_positions': data['trail_positions'].copy(),
+                        'trail_velocities': data['trail_velocities'].copy()
+                    })
             
             # Add explosion effects for this time
             for event in self.collision_events:
@@ -1334,12 +1534,56 @@ class TrajectoryVisualizer:
             
             self.animation_data.append(frame_data)
     
+    def _interpolate_position_velocity(self, times, positions, velocities, target_time):
+        """Interpolate position and velocity between waypoints with proper speed scaling."""
+        if len(times) == 0:
+            return None, None
+        
+        # Find the two waypoints to interpolate between
+        if target_time <= times[0]:
+            return positions[0], velocities[0]
+        elif target_time >= times[-1]:
+            return positions[-1], velocities[-1]
+        
+        # Find the indices of the surrounding waypoints
+        for i in range(len(times) - 1):
+            if times[i] <= target_time <= times[i + 1]:
+                t1, t2 = times[i], times[i + 1]
+                pos1, pos2 = positions[i], positions[i + 1]
+                vel1, vel2 = velocities[i], velocities[i + 1]
+                
+                # Calculate the actual distance between waypoints
+                distance = np.linalg.norm(pos2 - pos1)
+                time_interval = t2 - t1
+                
+                # Calculate the required speed to travel the distance in the time interval
+                required_speed = distance / time_interval if time_interval > 0 else 0
+                
+                # Calculate interpolation factor
+                alpha = (target_time - t1) / (t2 - t1)
+                
+                # Interpolate position linearly
+                interpolated_pos = pos1 + alpha * (pos2 - pos1)
+                
+                # Calculate velocity based on the direction and required speed
+                if distance > 0:
+                    direction = (pos2 - pos1) / distance
+                    interpolated_vel = direction * required_speed
+                else:
+                    # If waypoints are at the same position, use average velocity
+                    interpolated_vel = (vel1 + vel2) / 2
+                
+                return interpolated_pos, interpolated_vel
+        
+        return None, None
+    
     def animate_trajectories(self, trajectory_meshes: Dict[int, pv.PolyData], 
                            missile_meshes: Dict[int, pv.PolyData] = None,
-                           fps: int = 10, save_path: str = None):
+                           fps: int = 10, save_path: str = None, video_zoom: float = 1.0,
+                           intermediate_frames: int = 4):
         """Create an animation of the trajectories and missiles."""
         if not self.animation_data:
-            self.create_animation_data(trajectory_meshes, missile_meshes)
+            self.create_animation_data(trajectory_meshes, missile_meshes, intermediate_frames)
         
         print(f"Creating animation with {len(self.animation_data)} frames...")
         
@@ -1364,7 +1608,7 @@ class TrajectoryVisualizer:
             self.add_collision_markers_to_plot()
             
             # Calculate optimal camera position to include all elements
-            self._setup_animation_camera()
+            self._setup_animation_camera(video_zoom)
             
             # Track dynamic actors to clear each frame
             dynamic_actors = []
@@ -1397,102 +1641,110 @@ class TrajectoryVisualizer:
                 # Add active trajectories for this frame
                 for trajectory_info in frame_data['active_trajectories']:
                     trajectory_id = trajectory_info['id']
-                    positions = trajectory_info['positions']
-                    velocities = trajectory_info['velocities']
+                    current_position = trajectory_info['current_position']
+                    current_velocity = trajectory_info['current_velocity']
+                    trail_positions = trajectory_info['trail_positions']
                     
-                    # Create point cloud for current positions
-                    points = pv.PolyData(positions)
-                    points.point_data['velocity_magnitude'] = np.linalg.norm(velocities, axis=1)
+                    # Check if this trajectory has been intercepted
+                    trajectory_intercepted = False
+                    for collision in self.collision_events:
+                        if trajectory_id in collision.participants and frame_data['time'] >= collision.time:
+                            trajectory_intercepted = True
+                            break
                     
-                    # Add trajectory points
-                    color = ['red', 'blue', 'green', 'yellow', 'cyan', 'magenta', 'orange', 'purple'][trajectory_id % 8]
+                    # Choose color based on interception status
+                    if trajectory_intercepted:
+                        color = 'green'  # Intercepted trajectories are green
+                    else:
+                        color = 'blue'   # Normal trajectories are blue
                     
-                    trajectory_actor = self.plotter.add_mesh(
-                        points,
-                        color=color,
-                        point_size=15,
-                        render_points_as_spheres=True,
-                        show_scalar_bar=False
-                    )
-                    dynamic_actors.append(trajectory_actor)
-                    
-                    # Add velocity vectors
-                    if len(positions) > 0:
-                        velocity_vectors = []
-                        for pos, vel in zip(positions, velocities):
-                            if np.linalg.norm(vel) > 0:
-                                vel_norm = vel / np.linalg.norm(vel)
-                                arrow = pv.Arrow(
-                                    start=pos,
-                                    direction=vel_norm,
-                                    scale=3.0,
-                                    tip_length=0.3,
-                                    tip_radius=0.1,
-                                    shaft_radius=0.05
-                                )
-                                velocity_vectors.append(arrow)
+                    # Create trail line
+                    if len(trail_positions) > 1:
+                        trail_points = np.array(trail_positions)
+                        trail_line = pv.lines_from_points(trail_points)
                         
-                        if velocity_vectors:
-                            combined_vectors = velocity_vectors[0]
-                            for vec in velocity_vectors[1:]:
-                                combined_vectors = combined_vectors.merge(vec)
-                            
-                            vector_actor = self.plotter.add_mesh(
-                                combined_vectors,
-                                color=color,
-                                opacity=0.8
-                            )
-                            dynamic_actors.append(vector_actor)
+                        # Add trail with fading opacity
+                        trail_actor = self.plotter.add_mesh(
+                            trail_line,
+                            color=color,
+                            line_width=8,  # Same as missiles
+                            opacity=0.8,
+                            render_lines_as_tubes=True
+                        )
+                        dynamic_actors.append(trail_actor)
+                    
+                    # Add velocity vector (arrow head) for current position
+                    if np.linalg.norm(current_velocity) > 0:
+                        vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                        arrow = pv.Arrow(
+                            start=current_position,
+                            direction=vel_norm,
+                            scale=12.0,  # Same as missiles
+                            tip_length=0.4,
+                            tip_radius=0.3,
+                            shaft_radius=0.15
+                        )
+                        
+                        vector_actor = self.plotter.add_mesh(
+                            arrow,
+                            color=color,
+                            opacity=0.9
+                        )
+                        dynamic_actors.append(vector_actor)
                 
                 # Add active missiles for this frame
                 for missile_info in frame_data['active_missiles']:
                     missile_id = missile_info['id']
-                    positions = missile_info['positions']
-                    velocities = missile_info['velocities']
+                    current_position = missile_info['current_position']
+                    current_velocity = missile_info['current_velocity']
+                    trail_positions = missile_info['trail_positions']
                     
-                    # Create point cloud for current positions
-                    points = pv.PolyData(positions)
-                    points.point_data['velocity_magnitude'] = np.linalg.norm(velocities, axis=1)
+                    # Check if this missile has intercepted a trajectory
+                    missile_intercepted = False
+                    for collision in self.collision_events:
+                        if missile_id in collision.participants and frame_data['time'] >= collision.time:
+                            missile_intercepted = True
+                            break
                     
-                    # Add missile points
-                    color = ['orange', 'purple', 'brown', 'pink', 'cyan', 'lime', 'gold', 'coral'][missile_id % 8]
+                    # Choose color based on interception status
+                    if missile_intercepted:
+                        color = 'green'  # Intercepted missiles are green
+                    else:
+                        color = 'orange'  # Normal missiles are orange
                     
-                    missile_actor = self.plotter.add_mesh(
-                        points,
-                        color=color,
-                        point_size=40,  # Increased from 25 to 40
-                        render_points_as_spheres=True,
-                        show_scalar_bar=False
-                    )
-                    dynamic_actors.append(missile_actor)
-                    
-                    # Add velocity vectors
-                    if len(positions) > 0:
-                        velocity_vectors = []
-                        for pos, vel in zip(positions, velocities):
-                            if np.linalg.norm(vel) > 0:
-                                vel_norm = vel / np.linalg.norm(vel)
-                                arrow = pv.Arrow(
-                                    start=pos,
-                                    direction=vel_norm,
-                                    scale=3.0,
-                                    tip_length=0.3,
-                                    tip_radius=0.1,
-                                    shaft_radius=0.05
-                                )
-                                velocity_vectors.append(arrow)
+                    # Create trail line for missile
+                    if len(trail_positions) > 1:
+                        trail_points = np.array(trail_positions)
+                        trail_line = pv.lines_from_points(trail_points)
                         
-                        if velocity_vectors:
-                            combined_vectors = velocity_vectors[0]
-                            for vec in velocity_vectors[1:]:
-                                combined_vectors = combined_vectors.merge(vec)
-                            
-                            vector_actor = self.plotter.add_mesh(
-                                combined_vectors,
-                                color=color,
-                                opacity=0.8
-                            )
-                            dynamic_actors.append(vector_actor)
+                        # Add missile trail with fading opacity
+                        trail_actor = self.plotter.add_mesh(
+                            trail_line,
+                            color=color,
+                            line_width=8,
+                            opacity=0.8,
+                            render_lines_as_tubes=True
+                        )
+                        dynamic_actors.append(trail_actor)
+                    
+                    # Add velocity vector (arrow head) for current missile position
+                    if np.linalg.norm(current_velocity) > 0:
+                        vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                        arrow = pv.Arrow(
+                            start=current_position,
+                            direction=vel_norm,
+                            scale=12.0,  # Same as trajectories
+                            tip_length=0.4,
+                            tip_radius=0.3,
+                            shaft_radius=0.15
+                        )
+                        
+                        vector_actor = self.plotter.add_mesh(
+                            arrow,
+                            color=color,
+                            opacity=0.9
+                        )
+                        dynamic_actors.append(vector_actor)
                 
                 # Add explosion effects for this frame
                 for explosion_info in frame_data['explosions']:
@@ -1520,13 +1772,100 @@ class TrajectoryVisualizer:
                     dynamic_actors.append(explosion_actor)
                 
                 # Add legend (dynamic - may change each frame)
-                legend_text = f"Animation Frame {i+1}/{len(self.animation_data)}\nRed: Trajectory 1\nBlue: Trajectory 2"
-                if self.missiles:
-                    legend_text += "\nOrange/Purple: Missiles"
+                legend_text = f"Animation Frame {i+1}/{len(self.animation_data)}\nBlue: Trajectories\nOrange: Missiles"
+                if self.collision_events:
+                    legend_text += "\nGreen: Intercepted Objects"
                 if self.protected_regions:
                     legend_text += "\nRed Cylinders: Protected Regions"
                 if self.collision_events:
                     legend_text += "\nRed X: Collision Points"
+                
+                # Add end position arrows in the final frame
+                if i == len(self.animation_data) - 1:
+                    legend_text += "\nLarge Arrows: End Positions"
+                    # Add end position arrows for trajectories
+                    for trajectory_info in frame_data['active_trajectories']:
+                        trajectory_id = trajectory_info['id']
+                        current_position = trajectory_info['current_position']
+                        current_velocity = trajectory_info['current_velocity']
+                        
+                        # Check if this trajectory has been intercepted
+                        trajectory_intercepted = False
+                        for collision in self.collision_events:
+                            if trajectory_id in collision.participants and frame_data['time'] >= collision.time:
+                                trajectory_intercepted = True
+                                break
+                        
+                        if np.linalg.norm(current_velocity) > 0:
+                            vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                            arrow = pv.Arrow(
+                                start=current_position,
+                                direction=vel_norm,
+                                scale=40.0,  # Much larger arrow for end position
+                                tip_length=0.4,
+                                tip_radius=0.5,
+                                shaft_radius=0.25
+                            )
+                            
+                            # Choose color based on interception status
+                            if trajectory_intercepted:
+                                color = 'green'  # Intercepted trajectories are green
+                            else:
+                                color = 'blue'   # Normal trajectories are blue
+                            
+                            end_arrow_actor = self.plotter.add_mesh(
+                                arrow,
+                                color=color,
+                                opacity=0.9,
+                                lighting=True,
+                                ambient=0.8,
+                                diffuse=0.2,
+                                specular=0.5,
+                                specular_power=10
+                            )
+                            dynamic_actors.append(end_arrow_actor)
+                    
+                    # Add end position arrows for missiles
+                    for missile_info in frame_data['active_missiles']:
+                        missile_id = missile_info['id']
+                        current_position = missile_info['current_position']
+                        current_velocity = missile_info['current_velocity']
+                        
+                        # Check if this missile has intercepted a trajectory
+                        missile_intercepted = False
+                        for collision in self.collision_events:
+                            if missile_id in collision.participants and frame_data['time'] >= collision.time:
+                                missile_intercepted = True
+                                break
+                        
+                        if np.linalg.norm(current_velocity) > 0:
+                            vel_norm = current_velocity / np.linalg.norm(current_velocity)
+                            arrow = pv.Arrow(
+                                start=current_position,
+                                direction=vel_norm,
+                                scale=50.0,  # Much larger arrow for missile end position
+                                tip_length=0.4,
+                                tip_radius=0.6,
+                                shaft_radius=0.3
+                            )
+                            
+                            # Choose color based on interception status
+                            if missile_intercepted:
+                                color = 'green'  # Intercepted missiles are green
+                            else:
+                                color = 'orange'  # Normal missiles are orange
+                            
+                            end_arrow_actor = self.plotter.add_mesh(
+                                arrow,
+                                color=color,
+                                opacity=0.9,
+                                lighting=True,
+                                ambient=0.8,
+                                diffuse=0.2,
+                                specular=0.5,
+                                specular_power=10
+                            )
+                            dynamic_actors.append(end_arrow_actor)
                 
                 legend_actor = self.plotter.add_text(
                     legend_text,
@@ -1551,7 +1890,7 @@ class TrajectoryVisualizer:
                 self._create_video_from_frames(frame_paths, save_path, fps)
                 print(f"Animation saved to: {save_path}")
     
-    def _setup_animation_camera(self):
+    def _setup_animation_camera(self, video_zoom: float = 1.0):
         """Setup camera position optimized for animation to include all elements."""
         # Calculate bounds including trajectories, protected regions, and topography
         all_points = []
@@ -1593,8 +1932,8 @@ class TrajectoryVisualizer:
             z_range = z_max - z_min
             max_range = max(x_range, y_range, z_range)
             
-            # Set camera position with closer zoom for better detail
-            camera_distance = max_range * 0.5  # Reduced from 2.0 to 0.8 for closer view
+            # Set camera position with zoom factor applied
+            camera_distance = max_range * 0.5 / video_zoom  # Apply zoom factor
             
             # Position camera at an angle to show 3D perspective
             camera_pos = (
@@ -1609,12 +1948,13 @@ class TrajectoryVisualizer:
                 (0, 0, 1)  # Up vector
             ]
             
-            # Zoom in closer to fit all data with less margin
-            self.plotter.camera.zoom(0.7)  # Increased from 0.7 to 1.2 for closer zoom
+            # Apply additional zoom factor
+            self.plotter.camera.zoom(video_zoom)
+            print(f"Animation camera set with zoom factor: {video_zoom}")
         else:
             # Fallback camera position
             self.plotter.camera_position = 'iso'
-            self.plotter.camera.zoom(1.0)
+            self.plotter.camera.zoom(video_zoom)
     
     def _create_video_from_frames(self, frame_paths: List[str], output_path: str, fps: int):
         """Create video from frame images using ffmpeg."""
@@ -1638,7 +1978,39 @@ class TrajectoryVisualizer:
             print("ffmpeg not found or failed. Please install ffmpeg to create videos.")
             print("Individual frames are available in the temporary directory.")
     
-    def create_static_visualization(self, save_path: str = None, satellite_path: str = None):
+    def _setup_camera_with_zoom(self, zoom_factor: float = 1.0):
+        """Setup camera position with zoom factor."""
+        if self.topography_mesh is None:
+            return
+        
+        # Calculate bounds from topography mesh
+        bounds = self.topography_mesh.bounds
+        x_min, x_max, y_min, y_max, z_min, z_max = bounds
+        
+        # Calculate center and size
+        center_x = (x_min + x_max) / 2
+        center_y = (y_min + y_max) / 2
+        center_z = (z_min + z_max) / 2
+        
+        # Calculate size for camera positioning
+        size_x = x_max - x_min
+        size_y = y_max - y_min
+        size_z = z_max - z_min
+        max_size = max(size_x, size_y, size_z)
+        
+        # Apply zoom factor (higher zoom = closer camera)
+        camera_distance = max_size * 2.0 / zoom_factor
+        
+        # Set camera position
+        camera_pos = (center_x, center_y - camera_distance, center_z + camera_distance * 0.5)
+        focal_point = (center_x, center_y, center_z)
+        
+        self.plotter.camera_position = [camera_pos, focal_point, (0, 0, 1)]
+        self.plotter.camera.zoom(zoom_factor)
+        
+        print(f"Camera set with zoom factor: {zoom_factor}")
+    
+    def create_static_visualization(self, save_path: str = None, satellite_path: str = None, photo_zoom: float = 1.0):
         """Create a static visualization of all trajectories with optional satellite overlay."""
         if not self.trajectories:
             print("No trajectories loaded!")
@@ -1648,7 +2020,7 @@ class TrajectoryVisualizer:
         bounds = self.calculate_bounds()
         
         # Setup topography with optional satellite overlay
-        self.setup_topography(bounds, satellite_path)
+        self.setup_topography(bounds, satellite_path, self.topology_offset)
         
         # Setup visualization (off_screen if saving)
         self.setup_visualization(off_screen=bool(save_path))
@@ -1663,9 +2035,16 @@ class TrajectoryVisualizer:
         self.add_trajectories_to_plot(trajectory_meshes)
         
         # Create and add missile meshes
+        missile_meshes = None
         if self.missiles:
             missile_meshes = self.create_missile_meshes()
             self.add_missiles_to_plot(missile_meshes)
+        
+        # Add end position arrows for trajectories and missiles
+        self.add_end_position_arrows(trajectory_meshes, missile_meshes)
+        
+        # Add radar stations
+        self.add_radars_to_plot()
         
         # Create and add protected region meshes
         if self.protected_regions:
@@ -1675,14 +2054,20 @@ class TrajectoryVisualizer:
         # Add collision markers
         self.add_collision_markers_to_plot()
         
+        # Setup camera with zoom
+        self._setup_camera_with_zoom(photo_zoom)
+        
         # Add legend
-        legend_text = "Trajectory Visualization\nRed: Trajectory 1\nBlue: Trajectory 2"
-        if self.missiles:
-            legend_text += "\nOrange/Purple: Missiles"
+        legend_text = "Trajectory Visualization\nBlue: Trajectories\nOrange: Missiles"
+        if self.collision_events:
+            legend_text += "\nGreen: Intercepted Objects"
+        if self.radars:
+            legend_text += "\nPurple: Radar Stations"
         if self.protected_regions:
             legend_text += "\nRed Cylinders: Protected Regions"
         if self.collision_events:
             legend_text += "\nRed X: Collision Points"
+        legend_text += "\nLarge Arrows: End Positions"
         if satellite_path:
             legend_text += "\nSatellite imagery overlay enabled"
         
@@ -1710,7 +2095,7 @@ class TrajectoryVisualizer:
         bounds = self.calculate_bounds()
         
         # Setup topography with optional satellite overlay
-        self.setup_topography(bounds, satellite_path)
+        self.setup_topography(bounds, satellite_path, self.topology_offset)
         
         # Setup visualization
         self.setup_visualization()
@@ -1725,9 +2110,16 @@ class TrajectoryVisualizer:
         self.add_trajectories_to_plot(trajectory_meshes)
         
         # Create and add missile meshes
+        missile_meshes = None
         if self.missiles:
             missile_meshes = self.create_missile_meshes()
             self.add_missiles_to_plot(missile_meshes)
+        
+        # Add end position arrows for trajectories and missiles
+        self.add_end_position_arrows(trajectory_meshes, missile_meshes)
+        
+        # Add radar stations
+        self.add_radars_to_plot()
         
         # Create and add protected region meshes
         if self.protected_regions:
@@ -1739,12 +2131,18 @@ class TrajectoryVisualizer:
         
         # Add interactive features
         interactive_text = "Interactive Trajectory Visualization\nUse mouse to rotate, zoom, and pan"
+        interactive_text += "\nBlue cylinders show trajectories"
         if self.missiles:
-            interactive_text += "\nOrange/Purple cylinders show missiles"
+            interactive_text += "\nOrange cylinders show missiles"
+        if self.collision_events:
+            interactive_text += "\nGreen cylinders show intercepted objects"
+        if self.radars:
+            interactive_text += "\nPurple spheres show radar stations"
         if self.protected_regions:
             interactive_text += "\nRed cylinders show protected regions"
         if self.collision_events:
             interactive_text += "\nRed X marks show collision points"
+        interactive_text += "\nLarge arrows show end positions"
         if satellite_path:
             interactive_text += "\nSatellite imagery overlay enabled"
         
@@ -1813,7 +2211,7 @@ class TrajectoryVisualizer:
             self.plotter.add_mesh(
                 mesh,
                 color='red',
-                opacity=0.3,
+                opacity=0.6,  # Increased from 0.3 to 0.6 (30% more opaque)
                 show_edges=True,
                 edge_color='darkred',
                 line_width=2,
@@ -1846,12 +2244,184 @@ class TrajectoryVisualizer:
                 text_color='darkred'
             )
 
+    def add_end_position_arrows(self, trajectory_meshes: Dict[int, pv.PolyData], missile_meshes: Dict[int, pv.PolyData] = None):
+        """Add arrows at the end positions of trajectories and missiles."""
+        # Add end position arrows for trajectories
+        for trajectory_id, mesh_data in trajectory_meshes.items():
+            if mesh_data['positions'].shape[0] > 0:
+                end_position = mesh_data['positions'][-1]
+                end_velocity = mesh_data['velocities'][-1]
+                
+                # Create arrow pointing in the direction of final velocity
+                if np.linalg.norm(end_velocity) > 0:
+                    vel_norm = end_velocity / np.linalg.norm(end_velocity)
+                    arrow = pv.Arrow(
+                        start=end_position,
+                        direction=vel_norm,
+                        scale=40.0,  # Much larger arrow for end position
+                        tip_length=0.4,
+                        tip_radius=0.5,
+                        shaft_radius=0.25
+                    )
+                    
+                    color = 'blue'  # Use blue for all trajectories
+                    self.plotter.add_mesh(
+                        arrow,
+                        color=color,
+                        opacity=0.9,
+                        lighting=True,
+                        ambient=0.8,
+                        diffuse=0.2,
+                        specular=0.5,
+                        specular_power=10
+                    )
+                    
+                    # Add end position label
+                    self.plotter.add_point_labels(
+                        [end_position],
+                        [f'End T{trajectory_id}'],
+                        font_size=14,
+                        bold=True,
+                        text_color=color
+                    )
+        
+        # Add end position arrows for missiles
+        if missile_meshes:
+            for missile_id, mesh_data in missile_meshes.items():
+                if mesh_data['positions'].shape[0] > 0:
+                    end_position = mesh_data['positions'][-1]
+                    end_velocity = mesh_data['velocities'][-1]
+                    
+                    # Create arrow pointing in the direction of final velocity
+                    if np.linalg.norm(end_velocity) > 0:
+                        vel_norm = end_velocity / np.linalg.norm(end_velocity)
+                        arrow = pv.Arrow(
+                            start=end_position,
+                            direction=vel_norm,
+                            scale=50.0,  # Much larger arrow for missile end position
+                            tip_length=0.4,
+                            tip_radius=0.6,
+                            shaft_radius=0.3
+                        )
+                        
+                        color = ['orange', 'purple', 'brown', 'pink', 'cyan', 'lime', 'gold', 'coral'][missile_id % 8]
+                        self.plotter.add_mesh(
+                            arrow,
+                            color=color,
+                            opacity=0.9,
+                            lighting=True,
+                            ambient=0.8,
+                            diffuse=0.2,
+                            specular=0.5,
+                            specular_power=10
+                        )
+                        
+                        # Add end position label
+                        self.plotter.add_point_labels(
+                            [end_position],
+                            [f'End M{missile_id}'],
+                            font_size=14,
+                            bold=True,
+                            text_color=color
+                        )
+
+    def add_radars_to_plot(self):
+        """Add radar stations to the visualization as labeled dots."""
+        if not self.radars:
+            return
+        
+        for radar in self.radars:
+            # Create a small sphere to represent the radar station
+            radar_sphere = pv.Sphere(
+                center=radar.emplacement,
+                radius=20.0  # Small radius for radar representation
+            )
+            
+            # Add radar sphere to plot
+            self.plotter.add_mesh(
+                radar_sphere,
+                color='purple',  # Purple color for radar stations
+                opacity=1.0,  # Increased from 0.8 to 1.0 (30% more opaque)
+                lighting=True,
+                ambient=0.6,
+                diffuse=0.4,
+                specular=0.3,
+                specular_power=5
+            )
+            
+            # Add radar label
+            label_position = (
+                radar.emplacement[0],
+                radar.emplacement[1],
+                radar.emplacement[2] + 50  # Slightly above the radar
+            )
+            self.plotter.add_point_labels(
+                [label_position],
+                [f"Radar {radar.id}: {radar.description}"],
+                font_size=12,
+                bold=True,
+                text_color='purple',
+                shape_color='purple',
+                shape_opacity=0.7
+            )
+
 def main():
     """Main function to run the trajectory visualization suite."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="Trajectory Visualization Suite - Choose visualization mode",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python sim_visualize_tracks.py --mode satellite    # Use satellite imagery
+  python sim_visualize_tracks.py --mode topography   # Use topographic map
+  python sim_visualize_tracks.py --mode auto         # Auto-detect (default)
+        """
+    )
+    parser.add_argument(
+        '--mode', 
+        choices=['satellite', 'topography', 'auto'],
+        default='auto',
+        help='Visualization mode: satellite (satellite imagery), topography (elevation colormap), or auto (auto-detect)'
+    )
+    parser.add_argument(
+        '--photo-zoom',
+        type=float,
+        default=1.0,
+        help='Camera zoom factor for static photos (default: 1.0, higher values = more zoomed in)'
+    )
+    parser.add_argument(
+        '--video-zoom',
+        type=float,
+        default=1.0,
+        help='Camera zoom factor for video animations (default: 1.0, higher values = more zoomed in)'
+    )
+    parser.add_argument(
+        '--intermediate-frames',
+        type=int,
+        default=4,
+        help='Number of intermediate frames between global time steps (default: 4, higher values = smoother animation)'
+    )
+    parser.add_argument(
+        '--static-only',
+        action='store_true',
+        help='Skip animation generation and only create static visualization'
+    )
+    parser.add_argument(
+        '--topology-offset',
+        type=float,
+        default=300.0,
+        help='Topography offset in meters - adjusts where the terrain surface appears relative to z=0 (default: 300.0, higher values = terrain appears lower)'
+    )
+    
+    args = parser.parse_args()
+    
     visualizer = None
     try:
         print("Trajectory Visualization Suite")
         print("=" * 50)
+        print(f"Visualization mode: {args.mode}")
+        print("-" * 50)
         
         # Setup WSLg-specific configurations
         configure_pyvista_for_wslg()
@@ -1859,74 +2429,133 @@ def main():
         
         # Load reference location
         print("Loading reference LLA...")
-        visualizer = TrajectoryVisualizer()
-        ref_origin = visualizer.load_reference_lla_from_json('input.py')
+        visualizer = TrajectoryVisualizer(visualization_mode=args.mode, topology_offset=args.topology_offset)
+        ref_origin = visualizer.load_reference_lla_from_json('input.json')
+        
+        # Load global time steps
+        print("Loading global time steps...")
+        visualizer.load_time_steps_from_json('input.json')
         
         # Load trajectory data
         print("Loading trajectory data...")
-        trajectories = visualizer.load_trajectories_from_json('input.py')
+        trajectories = visualizer.load_trajectories_from_json('input.json')
         print(f"Loaded {len(trajectories)} trajectories")
         
         # Load protected regions
         print("Loading protected regions...")
-        protected_regions = visualizer.load_protected_regions_from_json('input.py')
+        protected_regions = visualizer.load_protected_regions_from_json('input.json')
         print(f"Loaded {len(protected_regions)} protected regions")
         
         # Load missile data
         print("Loading missile data...")
-        missiles = visualizer.load_missiles_from_json('input.py')
+        missiles = visualizer.load_missiles_from_json('input.json')
         print(f"Loaded {len(missiles)} missiles")
+        
+        # Load radar data
+        print("Loading radar data...")
+        radars = visualizer.load_radars_from_json('input.json')
+        print(f"Loaded {len(radars)} radar stations")
         
         # Detect collisions
         print("Detecting collisions...")
         collisions = visualizer.detect_collisions()
         print(f"Detected {len(collisions)} collision events")
         
-        # Check for satellite imagery
+        # Determine visualization mode and satellite path
         satellite_path = None
         satellite_data_dir = "satellite_data"
-        if os.path.exists(satellite_data_dir):
-            # First look for quick version for faster processing
-            quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
-            if os.path.exists(quick_path):
-                satellite_path = quick_path
-                file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                print(f"Using quick satellite imagery for faster processing: {satellite_path} ({file_size_mb:.1f}MB)")
-            else:
-                # Fallback to high-resolution files if quick version not available
-                jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
-                if jp2_files:
-                    # Use the largest JP2 file (highest resolution)
-                    jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
-                    satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
+        
+        if args.mode == 'satellite':
+            # Force satellite mode - check if satellite data exists
+            if os.path.exists(satellite_data_dir):
+                # First look for quick version for faster processing
+                quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
+                if os.path.exists(quick_path):
+                    satellite_path = quick_path
                     file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                    print(f"Found high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                    print(f"Using quick satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
                 else:
-                    # Look for other satellite image formats
-                    for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
-                        for file in os.listdir(satellite_data_dir):
-                            if file.lower().endswith(ext):
-                                satellite_path = os.path.join(satellite_data_dir, file)
-                                file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                                print(f"Found satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                    # Fallback to high-resolution files if quick version not available
+                    jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
+                    if jp2_files:
+                        # Use the largest JP2 file (highest resolution)
+                        jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
+                        satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
+                        file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                        print(f"Using high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                    else:
+                        # Look for other satellite image formats
+                        for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
+                            for file in os.listdir(satellite_data_dir):
+                                if file.lower().endswith(ext):
+                                    satellite_path = os.path.join(satellite_data_dir, file)
+                                    file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                                    print(f"Using satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                                    break
+                            if satellite_path:
                                 break
-                        if satellite_path:
-                            break
+                
+                if not satellite_path:
+                    print("ERROR: Satellite mode requested but no satellite imagery found in satellite_data/ directory")
+                    print("Please ensure satellite imagery files are present in the satellite_data/ directory")
+                    return
+            else:
+                print("ERROR: Satellite mode requested but satellite_data/ directory not found")
+                print("Please ensure satellite imagery files are present in the satellite_data/ directory")
+                return
+                
+        elif args.mode == 'topography':
+            # Force topography mode - ignore satellite data
+            print("Using topographic elevation colormap (satellite imagery disabled)")
+            satellite_path = None
+            
+        else:  # args.mode == 'auto'
+            # Auto-detect mode (original behavior)
+            if os.path.exists(satellite_data_dir):
+                # First look for quick version for faster processing
+                quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
+                if os.path.exists(quick_path):
+                    satellite_path = quick_path
+                    file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                    print(f"Auto-detected quick satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                else:
+                    # Fallback to high-resolution files if quick version not available
+                    jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
+                    if jp2_files:
+                        # Use the largest JP2 file (highest resolution)
+                        jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
+                        satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
+                        file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                        print(f"Auto-detected high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                    else:
+                        # Look for other satellite image formats
+                        for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
+                            for file in os.listdir(satellite_data_dir):
+                                if file.lower().endswith(ext):
+                                    satellite_path = os.path.join(satellite_data_dir, file)
+                                    file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
+                                    print(f"Auto-detected satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
+                                    break
+                            if satellite_path:
+                                break
         
         # Create static visualization
         print("Creating static visualization...")
         if satellite_path:
             print(f"Using satellite imagery: {satellite_path}")
-            visualizer.create_static_visualization('trajectory_static.png', satellite_path)
+            visualizer.create_static_visualization('trajectory_static.png', satellite_path, photo_zoom=args.photo_zoom)
         else:
-            print("No satellite imagery found, using elevation colormap")
-            visualizer.create_static_visualization('trajectory_static.png')
+            print("Using elevation colormap for topography")
+            visualizer.create_static_visualization('trajectory_static.png', photo_zoom=args.photo_zoom)
         
-        # Create animation
-        print("Creating animation...")
-        trajectory_meshes = visualizer.create_trajectory_meshes()
-        missile_meshes = visualizer.create_missile_meshes()
-        visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4')
+        # Create animation (unless static-only mode is enabled)
+        if not args.static_only:
+            print("Creating animation...")
+            trajectory_meshes = visualizer.create_trajectory_meshes()
+            missile_meshes = visualizer.create_missile_meshes()
+            visualizer.animate_trajectories(trajectory_meshes, missile_meshes, fps=5, save_path='trajectory_animation.mp4', video_zoom=args.video_zoom, intermediate_frames=args.intermediate_frames)
+        else:
+            print("Skipping animation generation (static-only mode)")
         
         # Create interactive visualization with WSLg optimization
         print("Creating interactive visualization...")

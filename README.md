@@ -38,7 +38,7 @@ sudo apt-get install ffmpeg
 Run the visualization suite with the provided sample data:
 
 ```bash
-python sim_visualize_tracks.py
+python sim_visualize_tracks.py --mode topography --photo-zoom 1.5 --video-zoom 0.5
 ```
 
 This will:
@@ -46,6 +46,61 @@ This will:
 2. Create a static visualization saved as `trajectory_static.png`
 3. Generate an animation saved as `trajectory_animation.mp4`
 4. Open an interactive 3D visualization window
+
+### Visualization Modes
+
+The visualization suite supports three different modes for the terrain display:
+
+#### Auto-detect Mode (Default)
+```bash
+python sim_visualize_tracks.py --mode auto
+```
+Automatically detects and uses satellite imagery if available in the `satellite_data/` directory, otherwise falls back to topographic elevation colormap.
+
+#### Satellite Imagery Mode
+```bash
+python sim_visualize_tracks.py --mode satellite
+```
+Forces the use of satellite imagery. Requires satellite image files to be present in the `satellite_data/` directory. If no satellite data is found, the program will exit with an error.
+
+#### Topography Mode
+```bash
+python sim_visualize_tracks.py --mode topography
+```
+Forces the use of topographic elevation colormap, ignoring any available satellite imagery. This mode uses synthetic terrain with realistic features.
+
+### Command Line Options
+
+```bash
+python sim_visualize_tracks.py --help
+```
+
+Available options:
+- `--mode {satellite,topography,auto}`: Choose visualization mode (default: auto)
+- `--photo-zoom FLOAT`: Camera zoom factor for static photos (default: 1.0, higher values = more zoomed in)
+- `--video-zoom FLOAT`: Camera zoom factor for video animations (default: 1.0, higher values = more zoomed in)
+- `--intermediate-frames INT`: Number of intermediate frames between global time steps (default: 4, higher values = smoother animation)
+- `--static-only`: Skip animation generation and only create static visualization
+- `--topology-offset FLOAT`: Topography offset in meters - adjusts where the terrain surface appears relative to z=0 (default: 300.0, higher values = terrain appears lower)
+
+### Examples
+
+```bash
+# Use satellite imagery with custom zoom levels and smooth animation
+python sim_visualize_tracks.py --mode satellite --photo-zoom 1.5 --video-zoom 2.0 --intermediate-frames 8
+
+# Use topography mode with closer camera for photos and very smooth animation
+python sim_visualize_tracks.py --mode topography --photo-zoom 2.0 --intermediate-frames 10
+
+# Auto-detect mode with wider view for videos and standard smoothness
+python sim_visualize_tracks.py --mode auto --video-zoom 0.7 --intermediate-frames 4
+
+# Static-only mode - skip animation for faster processing
+python sim_visualize_tracks.py --mode topography --static-only --photo-zoom 1.5
+
+# Adjust terrain positioning - fine-tune where objects at z=0 appear relative to terrain
+python sim_visualize_tracks.py --mode topography --topology-offset 200 --photo-zoom 1.5
+```
 
 ### Input Data Format
 
