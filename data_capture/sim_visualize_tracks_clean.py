@@ -40,12 +40,12 @@ def setup_wslg_display():
         pass
     
     if is_wslg:
-        print("🎉 WSLg detected (Windows 11) - native graphics support available!")
+        print("WSLg detected (Windows 11) - native graphics support available!")
         # WSLg provides native graphics support, no additional configuration needed
         os.environ['DISPLAY'] = ':0'
         return True
     else:
-        print("ℹ️ Not running in WSLg - using standard display configuration")
+        print("Not running in WSLg - using standard display configuration")
         return True
 
 def configure_pyvista_for_wslg():
@@ -61,14 +61,14 @@ def configure_pyvista_for_wslg():
         pass
     
     if is_wslg:
-        print("🔧 Configuring PyVista for Windows 11 WSLg...")
+        print("Configuring PyVista for Windows 11 WSLg...")
         
         # WSLg provides excellent graphics support - use optimal settings
         pv.global_theme.window_size = [1280, 720]  # Optimal window size for WSLg
         
-        print("✅ PyVista configured for Windows 11 WSLg with optimal settings")
+        print("PyVista configured for Windows 11 WSLg with optimal settings")
     else:
-        print("ℹ️ Not running in WSLg - using default PyVista settings")
+        print("Not running in WSLg - using default PyVista settings")
 
 # Copy the rest of your existing classes and functions here...
 # (This is just the configuration part - you'll need to copy the rest from the original file) 

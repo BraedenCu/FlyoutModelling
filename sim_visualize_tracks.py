@@ -35,7 +35,7 @@ plotter_instance = None
 
 def signal_handler(signum, frame):
     """Handle interrupt signals gracefully."""
-    print(f"\n🛑 Received signal {signum} - cleaning up...")
+    print(f"\nReceived signal {signum} - cleaning up...")
     cleanup_and_exit()
 
 def cleanup_and_exit():
@@ -49,23 +49,23 @@ def cleanup_and_exit():
         if plotter_instance is not None:
             try:
                 plotter_instance.close()
-                print("✅ PyVista plotter closed")
+                print("PyVista plotter closed")
             except:
                 pass
         
         # Close any matplotlib figures
         try:
             plt.close('all')
-            print("✅ Matplotlib figures closed")
+            print("Matplotlib figures closed")
         except:
             pass
         
         # Force garbage collection
         import gc
         gc.collect()
-        print("✅ Memory cleaned up")
+        print("Memory cleaned up")
     
-    print("👋 Exiting gracefully")
+    print("Exiting gracefully")
     sys.exit(0)
 
 def register_cleanup(plotter=None):
@@ -95,12 +95,12 @@ def setup_wslg_display():
         pass
     
     if is_wslg:
-        print("🎉 WSLg detected (Windows 11) - native graphics support available!")
+        print("WSLg detected (Windows 11) - native graphics support available!")
         # WSLg provides native graphics support, no additional configuration needed
         os.environ['DISPLAY'] = ':0'
         return True
     else:
-        print("ℹ️ Not running in WSLg - using standard display configuration")
+        print("Not running in WSLg - using standard display configuration")
         return True
 
 def configure_pyvista_for_wslg():
@@ -116,14 +116,14 @@ def configure_pyvista_for_wslg():
         pass
     
     if is_wslg:
-        print("🔧 Configuring PyVista for Windows 11 WSLg...")
+        print("Configuring PyVista for Windows 11 WSLg...")
         
         # WSLg provides excellent graphics support - use optimal settings
         pv.global_theme.window_size = [1280, 720]  # Optimal window size for WSLg
         
-        print("✅ PyVista configured for Windows 11 WSLg with optimal settings")
+        print("PyVista configured for Windows 11 WSLg with optimal settings")
     else:
-        print("ℹ️ Not running in WSLg - using default PyVista settings")
+        print("Not running in WSLg - using default PyVista settings")
 
 @dataclass
 class TrajectoryPoint:
@@ -277,7 +277,7 @@ class SatelliteImageryManager:
             # Create PyVista texture
             self.satellite_texture = pv.numpy_to_texture(sat_img)
             
-            print(f"✅ Successfully created satellite texture: {sat_img.shape}")
+            print(f"Successfully created satellite texture: {sat_img.shape}")
             return True
             
         except Exception as e:
@@ -467,7 +467,7 @@ class TopographyManager:
         # First try to load local topography data
         local_data = self.load_local_topography_data()
         if local_data is not None:
-            print("✅ Successfully loaded local topography data")
+            print("Successfully loaded local topography data")
             return local_data
         
         print("Local topography data not available, falling back to API download...")
@@ -847,9 +847,9 @@ class TrajectoryVisualizer:
             print("Loading satellite imagery overlay...")
             success = self.topography_manager.satellite_manager.load_satellite_imagery(satellite_path)
             if success:
-                print("✅ Satellite imagery loaded successfully")
+                print("Satellite imagery loaded successfully")
             else:
-                print("⚠️ Failed to load satellite imagery, using topography only")
+                print("Failed to load satellite imagery, using topography only")
         
         # Get topographic data
         topo_data = self.topography_manager.get_dem_data(bounds)
@@ -899,7 +899,7 @@ class TrajectoryVisualizer:
         if tex_coords is not None:
             # Use the newer PyVista API
             surface.active_texture_coordinates = tex_coords.astype(np.float32)
-            print(f"✅ Set texture coordinates on surface mesh")
+            print(f"Set texture coordinates on surface mesh")
             print(f"Texture coordinates shape: {tex_coords.shape}")
             print(f"Texture coordinates range: {tex_coords.min()} to {tex_coords.max()}")
         
@@ -1045,10 +1045,11 @@ class TrajectoryVisualizer:
         except:
             pass
         
-        if is_wslg and not off_screen:
-            # Use optimal window size for WSLg (Windows 11)
+        if is_wslg:
+            print("Using WSLg-optimized window size: 1280x720")
             window_size = (1280, 720)
-            print("🔧 Using WSLg-optimized window size: 1280x720")
+        else:
+            window_size = window_size
         
         # Create plotter with WSLg-optimized settings
         if is_wslg:
@@ -1824,7 +1825,7 @@ def main():
     """Main function to run the trajectory visualization suite."""
     visualizer = None
     try:
-        print("🚀 Trajectory Visualization Suite")
+        print("Trajectory Visualization Suite")
         print("=" * 50)
         
         # Setup WSLg-specific configurations
@@ -1905,7 +1906,7 @@ def main():
         # Create interactive visualization with WSLg optimization
         print("Creating interactive visualization...")
         if not display_ok:
-            print("⚠️ Display issues detected. Interactive visualization may not work properly.")
+            print("Display issues detected. Interactive visualization may not work properly.")
             print("   Consider using one of these alternatives:")
             print("   1. Run on Windows directly (not WSL)")
             print("   2. Update WSL for WSLg support: wsl --update")
@@ -1934,7 +1935,7 @@ def main():
             pass
         
         if is_wslg:
-            print("🎉 WSLg detected - interactive visualization should work well!")
+            print("WSLg detected - interactive visualization should work well!")
         
         try:
             if satellite_path:
@@ -1942,7 +1943,7 @@ def main():
             else:
                 visualizer.create_interactive_visualization()
         except Exception as e:
-            print(f"❌ Interactive visualization failed: {e}")
+            print(f"Interactive visualization failed: {e}")
             if is_wslg:
                 print("This is unexpected with WSLg. Try updating WSL: wsl --update")
             else:
@@ -1951,12 +1952,12 @@ def main():
             print("   - trajectory_static.png (static visualization)")
             print("   - trajectory_animation.mp4 (animation)")
         
-        print("✅ Visualization complete!")
+        print("Visualization complete!")
         
     except KeyboardInterrupt:
-        print("\n🛑 Interrupted by user")
+        print("\nInterrupted by user")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
         import traceback
         traceback.print_exc()
     finally:
@@ -1966,7 +1967,7 @@ def main():
                 visualizer.close()
             except:
                 pass
-        print("👋 Cleanup complete")
+        print("Cleanup complete")
 
 if __name__ == "__main__":
     main()

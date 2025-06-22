@@ -165,7 +165,7 @@ def create_metadata_file(dem_filepath: str, bounds: tuple, ref_origin: tuple, de
 
 def main():
     """Main function to use pre-generated topography data."""
-    print("🗺️  Topography Data Manager")
+    print("Topography Data Manager")
     print("=" * 50)
     
     # Check if we have pre-generated topography data
@@ -174,7 +174,7 @@ def main():
     dem_file = os.path.join(data_dir, "topography.tif")
     
     if os.path.exists(metadata_file) and os.path.exists(dem_file):
-        print("✅ Found pre-generated topography data!")
+        print("Found pre-generated topography data!")
         print(f"Metadata file: {metadata_file}")
         print(f"DEM file: {dem_file}")
         
@@ -203,12 +203,12 @@ def main():
             print(f"Error reading DEM file: {e}")
             return None
         
-        print("\n✅ Pre-generated topography data is ready for use!")
+        print("\nPre-generated topography data is ready for use!")
         print("The visualization script will use this local DEM data.")
         return dem_file
         
     else:
-        print("❌ Pre-generated topography data not found!")
+        print("Pre-generated topography data not found!")
         print(f"Expected files:")
         print(f"  - {metadata_file}")
         print(f"  - {dem_file}")

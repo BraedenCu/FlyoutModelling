@@ -59,7 +59,7 @@ def create_small_satellite_image():
         original_size = os.path.getsize(input_path) / (1024*1024)  # MB
         new_size = os.path.getsize(output_path) / (1024*1024)  # MB
         
-        print(f"✅ Created smaller satellite image: {output_path}")
+        print(f"Created smaller satellite image: {output_path}")
         print(f"Original file size: {original_size:.1f} MB")
         print(f"New file size: {new_size:.1f} MB")
         print(f"Size reduction: {original_size/new_size:.1f}x smaller")
