@@ -172,6 +172,15 @@ class Radar:
     type: str  # Type of resource (e.g., "radar")
     description: str  # Descriptive name
 
+@dataclass
+class NoFlyZone:
+    """Represents a no-fly zone (NZFS)."""
+    id: int
+    type: str
+    description: str
+    polygon_points: List[Tuple[float, float]]  # ENU coordinates for polygon vertices
+    up_direction: Tuple[float, float, float]  # ENU up direction vector
+
 class SatelliteImageryManager:
     """Manages satellite imagery overlay for topography visualization."""
     
@@ -2130,6 +2139,9 @@ class TrajectoryVisualizer:
         # Add radar stations
         self.add_radars_to_plot()
         
+        # Add no-fly zones
+        self.add_no_fly_zones_to_plot()
+        
         # Create and add protected region meshes
         if self.protected_regions:
             protected_region_meshes = self.create_protected_region_meshes()
@@ -2205,6 +2217,9 @@ class TrajectoryVisualizer:
         # Add radar stations
         self.add_radars_to_plot()
         
+        # Add no-fly zones
+        self.add_no_fly_zones_to_plot()
+        
         # Create and add protected region meshes
         if self.protected_regions:
             protected_region_meshes = self.create_protected_region_meshes()
@@ -2222,6 +2237,8 @@ class TrajectoryVisualizer:
             interactive_text += "\nGreen cylinders show intercepted objects"
         if self.radars:
             interactive_text += "\nred spheres show radar stations"
+        if hasattr(self, 'no_fly_zones') and self.no_fly_zones:
+            interactive_text += "\nGreen polygons show no-fly zones"
         if self.protected_regions:
             interactive_text += "\nRed cylinders show protected regions"
         if self.collision_events:
@@ -2812,6 +2829,154 @@ class TrajectoryVisualizer:
             self.radars = []
             self.launchers = []
 
+    def load_no_fly_zones_from_json(self, json_file: str) -> List[NoFlyZone]:
+        """
+        Load no-fly zones from JSON file.
+        
+        Args:
+            json_file: Path to JSON file containing NZFS data
+        
+        Returns:
+            List[NoFlyZone]: List of no-fly zone objects
+        """
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            
+            no_fly_zones = []
+            nzfs_data = data.get('nzfs', [])
+            
+            for i, nzfs in enumerate(nzfs_data):
+                emplacement = nzfs['emplacement']
+                
+                # Extract polygon points (all elements except the last one are 2D coordinates)
+                polygon_points = []
+                for j in range(len(emplacement) - 1):  # All but the last element
+                    point = emplacement[j]
+                    if len(point) == 2:  # Ensure it's a 2D point
+                        # Apply scale factor to 2D coordinates
+                        scaled_x = point[0] / self.scale_factor
+                        scaled_y = point[1] / self.scale_factor
+                        polygon_points.append((scaled_x, scaled_y))
+                
+                # Extract up direction (last element is 3D vector)
+                up_vector = emplacement[-1]  # Last element
+                if len(up_vector) == 3:  # Ensure it's a 3D vector
+                    scaled_up = tuple(v / self.scale_factor for v in up_vector)
+                else:
+                    print(f"Warning: Invalid up direction vector for NZFS {i+1}, using default [0,0,1]")
+                    scaled_up = (0.0, 0.0, 1.0)
+                
+                no_fly_zone = NoFlyZone(
+                    id=i + 1,
+                    type=nzfs['type'],
+                    description=nzfs['description'],
+                    polygon_points=polygon_points,
+                    up_direction=scaled_up
+                )
+                no_fly_zones.append(no_fly_zone)
+            
+            self.no_fly_zones = no_fly_zones
+            print(f"Loaded {len(no_fly_zones)} no-fly zones")
+            return no_fly_zones
+            
+        except Exception as e:
+            print(f"Error loading no-fly zones: {e}")
+            self.no_fly_zones = []
+            return []
+
+    def add_no_fly_zones_to_plot(self):
+        """Add no-fly zones to the visualization as green polygons."""
+        if not hasattr(self, 'no_fly_zones') or not self.no_fly_zones:
+            return
+        
+        for nzfs in self.no_fly_zones:
+            # Create polygon base
+            polygon_points = nzfs.polygon_points
+            if len(polygon_points) < 3:
+                continue
+            
+            # Create 3D polygon by adding Z coordinates
+            base_height = 0  # Start at ground level
+            top_height = 1000  # Extend 1000m upward (adjust as needed)
+            
+            # Create base polygon points (at ground level)
+            base_points = [(x, y, base_height) for x, y in polygon_points]
+            
+            # Create top polygon points (extended upward)
+            up_x, up_y, up_z = nzfs.up_direction
+            # Normalize the up direction and scale it
+            up_magnitude = np.sqrt(up_x**2 + up_y**2 + up_z**2)
+            if up_magnitude > 0:
+                up_x, up_y, up_z = up_x/up_magnitude, up_y/up_magnitude, up_z/up_magnitude
+            
+            # Extend each base point upward
+            top_points = []
+            for x, y, z in base_points:
+                extended_x = x + up_x * top_height
+                extended_y = y + up_y * top_height
+                extended_z = z + up_z * top_height
+                top_points.append((extended_x, extended_y, extended_z))
+            
+            # Create the complete mesh points (base + top)
+            all_points = base_points + top_points
+            n_vertices = len(base_points)
+            
+            # Create faces for the polygonal prism
+            faces = []
+            
+            # Side faces (connecting base to top)
+            for i in range(n_vertices):
+                # Each side face is a quad connecting base and top vertices
+                base_idx = i
+                base_next = (i + 1) % n_vertices
+                top_idx = n_vertices + i
+                top_next = n_vertices + ((i + 1) % n_vertices)
+                
+                # Create quad face (4 vertices)
+                faces.extend([4, base_idx, base_next, top_next, top_idx])
+            
+            # Base face (polygon at ground level)
+            base_face = [n_vertices] + list(range(n_vertices))
+            faces.extend(base_face)
+            
+            # Top face (polygon at top level)
+            top_face = [n_vertices] + list(range(n_vertices, 2 * n_vertices))
+            faces.extend(top_face)
+            
+            # Create PyVista mesh
+            import pyvista as pv
+            mesh = pv.PolyData(all_points, faces)
+            
+            # Add to plot
+            self.plotter.add_mesh(
+                mesh,
+                color='green',
+                opacity=0.3,  # Semi-transparent
+                show_edges=True,
+                edge_color='darkgreen',
+                line_width=2,
+                lighting=True,
+                ambient=0.4,
+                diffuse=0.6,
+                specular=0.2
+            )
+            
+            # Add label at the center of the base
+            center_x = sum(x for x, y, z in base_points) / n_vertices
+            center_y = sum(y for x, y, z in base_points) / n_vertices
+            center_z = base_height + 50  # Slightly above base
+            
+            self.plotter.add_point_labels(
+                [(center_x, center_y, center_z)],
+                [f"NZFS {nzfs.id}: {nzfs.description}"],
+                font_size=12,
+                bold=True,
+                text_color='green',
+                shape_color='green',
+                shape_opacity=0.7
+            )
+
 def main():
     """Main function to run the trajectory visualization suite."""
     # Parse command line arguments
@@ -2919,6 +3084,11 @@ Examples:
         print("Loading radar and launcher data...")
         visualizer.load_resources_from_json('input.json')
         print(f"Loaded {len(getattr(visualizer, 'radars', []))} radars and {len(getattr(visualizer, 'launchers', []))} launchers")
+        
+        # Load no-fly zones
+        print("Loading no-fly zones...")
+        no_fly_zones = visualizer.load_no_fly_zones_from_json('input.json')
+        print(f"Loaded {len(no_fly_zones)} no-fly zones")
         
         # Detect collisions
         print("Detecting collisions...")
