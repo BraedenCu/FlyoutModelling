@@ -1020,56 +1020,26 @@ class TrajectoryVisualizer:
                             img = src.read(1)
                             img = np.stack([img, img, img], axis=0)
                         img_height, img_width = height, width
-                # Use simulation bounds for mesh, but ensure it's always square
+                # Use simulation bounds for mesh
                 x_min, x_max, y_min, y_max = bounds
-                
-                # Calculate the center and size of the simulation area
-                center_x = (x_min + x_max) / 2
-                center_y = (y_min + y_max) / 2
-                
-                # Calculate the maximum range needed to cover all simulation data
-                x_range = x_max - x_min
-                y_range = y_max - y_min
-                max_range = max(x_range, y_range)
-                
-                # Add some padding to ensure the square covers everything
-                padding_factor = 1.2  # 20% padding
-                square_size = max_range * padding_factor
-                
-                # Calculate square bounds centered on the simulation area
-                square_x_min = center_x - square_size / 2
-                square_x_max = center_x + square_size / 2
-                square_y_min = center_y - square_size / 2
-                square_y_max = center_y + square_size / 2
-                
-                # Create square mesh coordinates
-                x_coords = np.linspace(square_x_min, square_x_max, img_width)
-                y_coords = np.linspace(square_y_min, square_y_max, img_height)
+                x_coords = np.linspace(x_min, x_max, img_width)
+                y_coords = np.linspace(y_min, y_max, img_height)
                 X, Y = np.meshgrid(x_coords, y_coords)
                 Z = np.zeros_like(X)  # Surface at z=0
-                
-                print(f"Created square flat surface with shape: {X.shape}")
-                print(f"Square bounds: ({square_x_min:.1f}, {square_y_min:.1f}) to ({square_x_max:.1f}, {square_y_max:.1f})")
-                print(f"Square size: {square_size:.1f}m x {square_size:.1f}m")
-                print(f"Original simulation bounds: {bounds}")
-                print(f"Surface at altitude 0m")
-                
+                print(f"Created flat surface with shape: {X.shape} covering bounds: {bounds} at altitude 0m")
                 # Create PyVista mesh
                 import pyvista as pv
                 grid = pv.StructuredGrid()
                 grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
                 grid.dimensions = [X.shape[1], X.shape[0], 1]
-                
                 # Create a surface mesh
                 surface = grid.extract_surface()
-                
                 # Create normalized texture coordinates
                 u = (X - X.min()) / (X.max() - X.min())
                 v = (Y - Y.min()) / (Y.max() - Y.min())
                 tex_coords = np.column_stack([u.flatten(), v.flatten()])
                 surface.active_texture_coordinates = tex_coords.astype(np.float32)
-                
-                print(f"Set texture coordinates on square flat surface")
+                print(f"Set texture coordinates on flat surface")
                 print(f"Texture coordinates range: {tex_coords.min()} to {tex_coords.max()}")
                 self.topography_mesh = surface
                 return
@@ -2176,7 +2146,7 @@ class TrajectoryVisualizer:
         if self.collision_events:
             legend_text += "\nGreen: Intercepted Objects"
         if self.radars:
-            legend_text += "\nPurple: Radar Stations"
+            legend_text += "\nred: Radar Stations"
         if self.protected_regions:
             legend_text += "\nRed Cylinders: Protected Regions"
         if self.collision_events:
@@ -2251,7 +2221,7 @@ class TrajectoryVisualizer:
         if self.collision_events:
             interactive_text += "\nGreen cylinders show intercepted objects"
         if self.radars:
-            interactive_text += "\nPurple spheres show radar stations"
+            interactive_text += "\nred spheres show radar stations"
         if self.protected_regions:
             interactive_text += "\nRed cylinders show protected regions"
         if self.collision_events:
@@ -2451,76 +2421,61 @@ class TrajectoryVisualizer:
                         )
 
     def add_radars_to_plot(self):
-        """Add radar stations to the visualization as labeled dots with range circles."""
-        if not self.radars:
-            return
-        
-        for radar in self.radars:
-            # Get scaled radius for radar representation
-            scaled_radius, _ = self._get_scaled_visual_params(base_radius=20.0)
-            
-            # Create a small sphere to represent the radar station
-            radar_sphere = pv.Sphere(
-                center=radar.emplacement,
-                radius=scaled_radius
-            )
-            
-            # Add radar sphere to plot
-            self.plotter.add_mesh(
-                radar_sphere,
-                color='purple',  # Purple color for radar stations
-                opacity=1.0,  # Increased from 0.8 to 1.0 (30% more opaque)
-                lighting=True,
-                ambient=0.6,
-                diffuse=0.4,
-                specular=0.3,
-                specular_power=5
-            )
-            
-            # Create range circle at the radar's Z coordinate
-            # Generate points around the circle
-            angles = np.linspace(0, 2 * np.pi, 64)  # 64 points for smooth circle
-            circle_points = []
-            
-            for angle in angles:
-                x = radar.emplacement[0] + radar.range * np.cos(angle)
-                y = radar.emplacement[1] + radar.range * np.sin(angle)
-                z = radar.emplacement[2]  # Same Z as radar
-                circle_points.append([x, y, z])
-            
-            # Create a closed circle by adding the first point again
-            circle_points.append(circle_points[0])
-            
-            # Create line mesh for the range circle
-            range_circle = pv.lines_from_points(circle_points)
-            
-            # Get scaled line width for range circle
-            _, scaled_line_width = self._get_scaled_visual_params(base_line_width=2.0)
-            
-            # Add range circle to plot
-            self.plotter.add_mesh(
-                range_circle,
-                color='purple',
-                line_width=scaled_line_width,
-                render_lines_as_tubes=True,
-                opacity=0.8
-            )
-            
-            # Add radar label
-            label_position = (
-                radar.emplacement[0],
-                radar.emplacement[1],
-                radar.emplacement[2] + 50  # Slightly above the radar
-            )
-            self.plotter.add_point_labels(
-                [label_position],
-                [f"Radar {radar.id}: {radar.description}"],
-                font_size=12,
-                bold=True,
-                text_color='purple',
-                shape_color='purple',
-                shape_opacity=0.7
-            )
+        """Add radar and launcher stations to the visualization as labeled dots with range circles."""
+        # Plot radars
+        for radar in getattr(self, 'radars', []):
+            self._plot_resource_station(radar, color='red', label_prefix='Radar')
+        # Plot launchers
+        for launcher in getattr(self, 'launchers', []):
+            self._plot_resource_station(launcher, color='orange', label_prefix='Launcher')
+
+    def _plot_resource_station(self, resource, color, label_prefix):
+        scaled_radius, _ = self._get_scaled_visual_params(base_radius=20.0)
+        # Sphere
+        sphere = pv.Sphere(center=resource.emplacement, radius=scaled_radius)
+        self.plotter.add_mesh(
+            sphere,
+            color=color,
+            opacity=1.0,
+            lighting=True,
+            ambient=0.6,
+            diffuse=0.4,
+            specular=0.3,
+            specular_power=5
+        )
+        # Range circle
+        angles = np.linspace(0, 2 * np.pi, 64)
+        circle_points = [
+            [resource.emplacement[0] + resource.range * np.cos(angle),
+             resource.emplacement[1] + resource.range * np.sin(angle),
+             resource.emplacement[2]]
+            for angle in angles
+        ]
+        circle_points.append(circle_points[0])
+        range_circle = pv.lines_from_points(circle_points)
+        _, scaled_line_width = self._get_scaled_visual_params(base_line_width=2.0)
+        self.plotter.add_mesh(
+            range_circle,
+            color=color,
+            line_width=scaled_line_width,
+            render_lines_as_tubes=True,
+            opacity=0.8
+        )
+        # Label
+        label_position = (
+            resource.emplacement[0],
+            resource.emplacement[1],
+            resource.emplacement[2] + 50
+        )
+        self.plotter.add_point_labels(
+            [label_position],
+            [f"{label_prefix} {resource.id}: {resource.description}"],
+            font_size=12,
+            bold=True,
+            text_color=color,
+            shape_color=color,
+            shape_opacity=0.7
+        )
 
     def _setup_topdown_camera(self, video_zoom: float = 1.0):
         """Setup camera position for top-down view (looking straight down from above)."""
@@ -2817,6 +2772,46 @@ class TrajectoryVisualizer:
             else:
                 print("Top-down animation frames generated (no save path specified)")
 
+    def load_resources_from_json(self, json_file: str):
+        """
+        Load radars and launchers from JSON file.
+        Populates self.radars and self.launchers.
+        """
+        try:
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            resources = data.get('resources', [])
+            radars = []
+            launchers = []
+            for resource in resources:
+                scaled_emplacement, _ = self._apply_scale_factor(tuple(resource['emplacement']))
+                scaled_range = resource['range'] / self.scale_factor
+                if resource['type'] == 'radar':
+                    radar = Radar(
+                        id=resource['id'],
+                        emplacement=scaled_emplacement,
+                        range=scaled_range,
+                        type=resource['type'],
+                        description=resource['description']
+                    )
+                    radars.append(radar)
+                elif resource['type'] == 'launcher':
+                    launcher = Radar(
+                        id=resource['id'],
+                        emplacement=scaled_emplacement,
+                        range=scaled_range,
+                        type=resource['type'],
+                        description=resource['description']
+                    )
+                    launchers.append(launcher)
+            self.radars = radars
+            self.launchers = launchers
+            print(f"Loaded {len(radars)} radars and {len(launchers)} launchers")
+        except Exception as e:
+            print(f"Error loading resources: {e}")
+            self.radars = []
+            self.launchers = []
+
 def main():
     """Main function to run the trajectory visualization suite."""
     # Parse command line arguments
@@ -2920,10 +2915,10 @@ Examples:
         missiles = visualizer.load_missiles_from_json('input.json')
         print(f"Loaded {len(missiles)} missiles")
         
-        # Load radar data
-        print("Loading radar data...")
-        radars = visualizer.load_radars_from_json('input.json')
-        print(f"Loaded {len(radars)} radar stations")
+        # Load radar and launcher data
+        print("Loading radar and launcher data...")
+        visualizer.load_resources_from_json('input.json')
+        print(f"Loaded {len(getattr(visualizer, 'radars', []))} radars and {len(getattr(visualizer, 'launchers', []))} launchers")
         
         # Detect collisions
         print("Detecting collisions...")
