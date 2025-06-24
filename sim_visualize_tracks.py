@@ -168,6 +168,7 @@ class Radar:
     """Represents a radar station."""
     id: int
     emplacement: Tuple[float, float, float]  # ENU coordinates (x, y, z)
+    range: float  # Range in meters
     type: str  # Type of resource (e.g., "radar")
     description: str  # Descriptive name
 
@@ -793,9 +794,13 @@ class TrajectoryVisualizer:
                     # Apply scale factor to emplacement position
                     scaled_emplacement, _ = self._apply_scale_factor(tuple(resource_data['emplacement']))
                     
+                    # Apply scale factor to range
+                    scaled_range = resource_data['range'] / self.scale_factor
+                    
                     radar = Radar(
                         id=resource_data['id'],
                         emplacement=scaled_emplacement,
+                        range=scaled_range,
                         type=resource_data['type'],
                         description=resource_data['description']
                     )
@@ -816,12 +821,14 @@ class TrajectoryVisualizer:
         scaled_threshold = collision_threshold / self.scale_factor
         
         collision_events = []
-        all_objects = []
         
-        # Collect all trajectory and missile objects
+        # Collect trajectory and missile objects separately
+        trajectory_objects = []
+        missile_objects = []
+        
         for trajectory in self.trajectories:
             for point in trajectory.points:
-                all_objects.append({
+                trajectory_objects.append({
                     'type': 'trajectory',
                     'id': trajectory.id,
                     'time': point.time,
@@ -830,32 +837,29 @@ class TrajectoryVisualizer:
         
         for missile in self.missiles:
             for point in missile.points:
-                all_objects.append({
+                missile_objects.append({
                     'type': 'missile',
                     'id': missile.id,
                     'time': point.time,
                     'position': point.position
                 })
         
-        # Sort by time
-        all_objects.sort(key=lambda x: x['time'])
-        
-        # Check for collisions at each time step
-        for i, obj1 in enumerate(all_objects):
-            for j, obj2 in enumerate(all_objects[i+1:], i+1):
+        # Check for collisions between trajectories and missiles only
+        for trajectory_obj in trajectory_objects:
+            for missile_obj in missile_objects:
                 # Only check objects at the same time
-                if abs(obj1['time'] - obj2['time']) < 0.1:  # Within 0.1 seconds
+                if abs(trajectory_obj['time'] - missile_obj['time']) < 0.1:  # Within 0.1 seconds
                     # Calculate distance between objects
-                    pos1 = np.array(obj1['position'])
-                    pos2 = np.array(obj2['position'])
+                    pos1 = np.array(trajectory_obj['position'])
+                    pos2 = np.array(missile_obj['position'])
                     distance = np.linalg.norm(pos1 - pos2)
                     
                     if distance <= scaled_threshold:
                         # Check if this collision is already recorded
                         collision_exists = False
                         for event in collision_events:
-                            if (abs(event.time - obj1['time']) < 0.1 and 
-                                event.participants == [obj1['id'], obj2['id']]):
+                            if (abs(event.time - trajectory_obj['time']) < 0.1 and 
+                                event.participants == [trajectory_obj['id'], missile_obj['id']]):
                                 collision_exists = True
                                 break
                         
@@ -863,14 +867,14 @@ class TrajectoryVisualizer:
                             # Create collision event
                             collision_pos = tuple((pos1 + pos2) / 2)  # Midpoint
                             collision_event = CollisionEvent(
-                                time=obj1['time'],
+                                time=trajectory_obj['time'],
                                 position=collision_pos,
-                                participants=[obj1['id'], obj2['id']]
+                                participants=[trajectory_obj['id'], missile_obj['id']]
                             )
                             collision_events.append(collision_event)
         
         self.collision_events = collision_events
-        print(f"Detected {len(collision_events)} collision events")
+        print(f"Detected {len(collision_events)} collision events between missiles and tracks")
         return collision_events
     
     def create_explosion_mesh(self, position: Tuple[float, float, float], 
@@ -2417,7 +2421,7 @@ class TrajectoryVisualizer:
                         )
 
     def add_radars_to_plot(self):
-        """Add radar stations to the visualization as labeled dots."""
+        """Add radar stations to the visualization as labeled dots with range circles."""
         if not self.radars:
             return
         
@@ -2441,6 +2445,35 @@ class TrajectoryVisualizer:
                 diffuse=0.4,
                 specular=0.3,
                 specular_power=5
+            )
+            
+            # Create range circle at the radar's Z coordinate
+            # Generate points around the circle
+            angles = np.linspace(0, 2 * np.pi, 64)  # 64 points for smooth circle
+            circle_points = []
+            
+            for angle in angles:
+                x = radar.emplacement[0] + radar.range * np.cos(angle)
+                y = radar.emplacement[1] + radar.range * np.sin(angle)
+                z = radar.emplacement[2]  # Same Z as radar
+                circle_points.append([x, y, z])
+            
+            # Create a closed circle by adding the first point again
+            circle_points.append(circle_points[0])
+            
+            # Create line mesh for the range circle
+            range_circle = pv.lines_from_points(circle_points)
+            
+            # Get scaled line width for range circle
+            _, scaled_line_width = self._get_scaled_visual_params(base_line_width=2.0)
+            
+            # Add range circle to plot
+            self.plotter.add_mesh(
+                range_circle,
+                color='purple',
+                line_width=scaled_line_width,
+                render_lines_as_tubes=True,
+                opacity=0.8
             )
             
             # Add radar label
