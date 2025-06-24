@@ -1020,26 +1020,56 @@ class TrajectoryVisualizer:
                             img = src.read(1)
                             img = np.stack([img, img, img], axis=0)
                         img_height, img_width = height, width
-                # Use simulation bounds for mesh
+                # Use simulation bounds for mesh, but ensure it's always square
                 x_min, x_max, y_min, y_max = bounds
-                x_coords = np.linspace(x_min, x_max, img_width)
-                y_coords = np.linspace(y_min, y_max, img_height)
+                
+                # Calculate the center and size of the simulation area
+                center_x = (x_min + x_max) / 2
+                center_y = (y_min + y_max) / 2
+                
+                # Calculate the maximum range needed to cover all simulation data
+                x_range = x_max - x_min
+                y_range = y_max - y_min
+                max_range = max(x_range, y_range)
+                
+                # Add some padding to ensure the square covers everything
+                padding_factor = 1.2  # 20% padding
+                square_size = max_range * padding_factor
+                
+                # Calculate square bounds centered on the simulation area
+                square_x_min = center_x - square_size / 2
+                square_x_max = center_x + square_size / 2
+                square_y_min = center_y - square_size / 2
+                square_y_max = center_y + square_size / 2
+                
+                # Create square mesh coordinates
+                x_coords = np.linspace(square_x_min, square_x_max, img_width)
+                y_coords = np.linspace(square_y_min, square_y_max, img_height)
                 X, Y = np.meshgrid(x_coords, y_coords)
                 Z = np.zeros_like(X)  # Surface at z=0
-                print(f"Created flat surface with shape: {X.shape} covering bounds: {bounds} at altitude 0m")
+                
+                print(f"Created square flat surface with shape: {X.shape}")
+                print(f"Square bounds: ({square_x_min:.1f}, {square_y_min:.1f}) to ({square_x_max:.1f}, {square_y_max:.1f})")
+                print(f"Square size: {square_size:.1f}m x {square_size:.1f}m")
+                print(f"Original simulation bounds: {bounds}")
+                print(f"Surface at altitude 0m")
+                
                 # Create PyVista mesh
                 import pyvista as pv
                 grid = pv.StructuredGrid()
                 grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
                 grid.dimensions = [X.shape[1], X.shape[0], 1]
+                
                 # Create a surface mesh
                 surface = grid.extract_surface()
+                
                 # Create normalized texture coordinates
                 u = (X - X.min()) / (X.max() - X.min())
                 v = (Y - Y.min()) / (Y.max() - Y.min())
                 tex_coords = np.column_stack([u.flatten(), v.flatten()])
                 surface.active_texture_coordinates = tex_coords.astype(np.float32)
-                print(f"Set texture coordinates on flat surface")
+                
+                print(f"Set texture coordinates on square flat surface")
                 print(f"Texture coordinates range: {tex_coords.min()} to {tex_coords.max()}")
                 self.topography_mesh = surface
                 return
