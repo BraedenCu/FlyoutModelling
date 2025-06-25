@@ -178,7 +178,7 @@ class NoFlyZone:
     id: int
     type: str
     description: str
-    polygon_points: List[Tuple[float, float]]  # ENU coordinates for polygon vertices
+    polygon_points: List[Tuple[float, float, float]]  # ENU coordinates for polygon vertices (3D)
     up_direction: Tuple[float, float, float]  # ENU up direction vector
 
 class SatelliteImageryManager:
@@ -2849,15 +2849,24 @@ class TrajectoryVisualizer:
             for i, nzfs in enumerate(nzfs_data):
                 emplacement = nzfs['emplacement']
                 
-                # Extract polygon points (all elements except the last one are 2D coordinates)
+                # Extract polygon points (all elements except the last one are 3D coordinates)
                 polygon_points = []
                 for j in range(len(emplacement) - 1):  # All but the last element
                     point = emplacement[j]
-                    if len(point) == 2:  # Ensure it's a 2D point
-                        # Apply scale factor to 2D coordinates
+                    if len(point) == 3:  # Ensure it's a 3D point (E, N, U)
+                        # Apply scale factor to 3D coordinates
                         scaled_x = point[0] / self.scale_factor
                         scaled_y = point[1] / self.scale_factor
-                        polygon_points.append((scaled_x, scaled_y))
+                        scaled_z = point[2] / self.scale_factor
+                        polygon_points.append((scaled_x, scaled_y, scaled_z))
+                    elif len(point) == 2:  # Backward compatibility with 2D points
+                        # Apply scale factor to 2D coordinates, assume U=0
+                        scaled_x = point[0] / self.scale_factor
+                        scaled_y = point[1] / self.scale_factor
+                        polygon_points.append((scaled_x, scaled_y, 0.0))
+                    else:
+                        print(f"Warning: Invalid point format for NZFS {i+1}, point {j}: {point}")
+                        continue
                 
                 # Extract up direction (last element is 3D vector)
                 up_vector = emplacement[-1]  # Last element
@@ -2896,12 +2905,8 @@ class TrajectoryVisualizer:
             if len(polygon_points) < 3:
                 continue
             
-            # Create 3D polygon by adding Z coordinates
-            base_height = 0  # Start at ground level
-            top_height = 1000  # Extend 1000m upward (adjust as needed)
-            
-            # Create base polygon points (at ground level)
-            base_points = [(x, y, base_height) for x, y in polygon_points]
+            # Create 3D polygon using the provided 3D coordinates
+            base_points = polygon_points  # Already 3D coordinates
             
             # Create top polygon points (extended upward)
             up_x, up_y, up_z = nzfs.up_direction
@@ -2911,6 +2916,7 @@ class TrajectoryVisualizer:
                 up_x, up_y, up_z = up_x/up_magnitude, up_y/up_magnitude, up_z/up_magnitude
             
             # Extend each base point upward
+            top_height = 1000  # Extend 1000m upward (adjust as needed)
             top_points = []
             for x, y, z in base_points:
                 extended_x = x + up_x * top_height
@@ -2936,7 +2942,7 @@ class TrajectoryVisualizer:
                 # Create quad face (4 vertices)
                 faces.extend([4, base_idx, base_next, top_next, top_idx])
             
-            # Base face (polygon at ground level)
+            # Base face (polygon at base level)
             base_face = [n_vertices] + list(range(n_vertices))
             faces.extend(base_face)
             
@@ -2965,7 +2971,7 @@ class TrajectoryVisualizer:
             # Add label at the center of the base
             center_x = sum(x for x, y, z in base_points) / n_vertices
             center_y = sum(y for x, y, z in base_points) / n_vertices
-            center_z = base_height + 50  # Slightly above base
+            center_z = sum(z for x, y, z in base_points) / n_vertices + 50  # Slightly above center
             
             self.plotter.add_point_labels(
                 [(center_x, center_y, center_z)],
