@@ -26,6 +26,8 @@ import signal
 import sys
 import atexit
 import argparse
+import traceback
+import gc
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore")
@@ -62,7 +64,6 @@ def cleanup_and_exit():
             pass
         
         # Force garbage collection
-        import gc
         gc.collect()
         print("Memory cleaned up")
     
@@ -128,20 +129,42 @@ def configure_pyvista_for_wslg():
 
 @dataclass
 class TrajectoryPoint:
-    """Represents a single point in a trajectory."""
+    """
+    Represents a single point in a trajectory.
+    
+    Attributes:
+        time: Time in seconds from simulation start
+        position: ENU coordinates (x, y, z) in meters
+        velocity: ENU velocity vector (vx, vy, vz) in meters per second
+    """
     time: float
     position: Tuple[float, float, float]  # ENU coordinates
     velocity: Tuple[float, float, float]  # ENU velocity
 
 @dataclass
 class Trajectory:
-    """Represents a complete trajectory."""
+    """
+    Represents a complete trajectory.
+    
+    Attributes:
+        id: Unique identifier for the trajectory
+        points: List of TrajectoryPoint objects representing the path
+    """
     id: int
     points: List[TrajectoryPoint]
 
 @dataclass
 class ProtectedRegion:
-    """Represents a cylindrical protected region."""
+    """
+    Represents a cylindrical protected region.
+    
+    Attributes:
+        id: Unique identifier for the protected region
+        centroid: ENU coordinates (x, y, z) of the cylinder center in meters
+        radius: Radius of the cylinder in meters
+        height_limit: Maximum height of the cylinder in meters
+        name: Descriptive name for the protected region
+    """
     id: int
     centroid: Tuple[float, float, float]  # ENU coordinates (x, y, z)
     radius: float  # radius in meters
@@ -150,13 +173,28 @@ class ProtectedRegion:
 
 @dataclass
 class Missile:
-    """Represents a missile trajectory."""
+    """
+    Represents a missile trajectory.
+    
+    Attributes:
+        id: Unique identifier for the missile
+        points: List of TrajectoryPoint objects representing the missile path
+    """
     id: int
     points: List[TrajectoryPoint]
 
 @dataclass
 class CollisionEvent:
-    """Represents a collision event between trajectories/missiles."""
+    """
+    Represents a collision event between trajectories/missiles.
+    
+    Attributes:
+        time: Time in seconds when the collision occurred
+        position: ENU coordinates (x, y, z) of the collision point in meters
+        participants: List of IDs of objects involved in the collision
+        explosion_duration: Duration of explosion animation in seconds (default: 2.0)
+        explosion_radius: Maximum radius of explosion effect in meters (default: 10.0)
+    """
     time: float
     position: Tuple[float, float, float]  # ENU coordinates of collision
     participants: List[int]  # IDs of colliding objects
@@ -165,7 +203,16 @@ class CollisionEvent:
 
 @dataclass
 class Radar:
-    """Represents a radar station."""
+    """
+    Represents a radar station.
+    
+    Attributes:
+        id: Unique identifier for the radar station
+        emplacement: ENU coordinates (x, y, z) of the radar location in meters
+        range: Detection range of the radar in meters
+        type: Type of resource (e.g., "radar", "launcher")
+        description: Descriptive name for the radar station
+    """
     id: int
     emplacement: Tuple[float, float, float]  # ENU coordinates (x, y, z)
     range: float  # Range in meters
@@ -174,7 +221,16 @@ class Radar:
 
 @dataclass
 class NoFlyZone:
-    """Represents a no-fly zone (NZFS)."""
+    """
+    Represents a no-fly zone (NZFS).
+    
+    Attributes:
+        id: Unique identifier for the no-fly zone
+        type: Type of no-fly zone (e.g., "NZFS")
+        description: Descriptive name for the no-fly zone
+        polygon_points: List of ENU coordinates for polygon vertices (3D) in meters
+        up_direction: ENU up direction vector for the no-fly zone
+    """
     id: int
     type: str
     description: str
@@ -301,7 +357,6 @@ class SatelliteImageryManager:
             
         except Exception as e:
             print(f"Error loading satellite imagery: {e}")
-            import traceback
             traceback.print_exc()
             return False
     
@@ -612,17 +667,46 @@ class TopographyManager:
         return Z
 
 class TrajectoryVisualizer:
-    """Main visualization class for trajectory display."""
+    """
+    Main class for visualizing trajectory data with 3D rendering capabilities.
+    
+    This class handles loading trajectory data from JSON files, creating 3D visualizations,
+    generating animations, and managing various visualization modes including static images,
+    interactive 3D views, and video animations.
+    
+    Attributes:
+        topography_manager: Manager for handling topography and satellite data
+        ref_origin: Reference origin point in ENU coordinates (x, y, z) in meters
+        visualization_mode: Mode for visualization ('auto', 'topography', 'satellite')
+        topology_offset: Offset in meters to position terrain relative to z=0
+        scale_factor: Scaling factor for visualization elements
+        trajectories: List of Trajectory objects
+        missiles: List of Missile objects
+        protected_regions: List of ProtectedRegion objects
+        radars: List of Radar objects
+        no_fly_zones: List of NoFlyZone objects
+        collisions: List of CollisionEvent objects
+        time_steps: List of time steps for animation
+        bounds: Tuple of (x_min, x_max, y_min, y_max) defining simulation area
+        plotter: PyVista plotter for 3D visualization
+        topography_mesh: PyVista mesh for terrain visualization
+        backdrop_mesh: PyVista mesh for background plane
+        animation_data: Dictionary containing animation frame data
+    """
     
     def __init__(self, topography_manager: TopographyManager = None, ref_origin=(0.0, 0.0, 0.0), visualization_mode='auto', topology_offset: float = 300.0, scale_factor: float = 1.0):
-        """Initialize the trajectory visualizer.
+        """
+        Initialize the TrajectoryVisualizer.
         
         Args:
-            topography_manager: Optional topography manager for terrain data
-            ref_origin: Reference origin point (lat, lon, alt)
-            visualization_mode: 'satellite', 'topography', or 'auto'
-            topology_offset: Offset for terrain positioning
-            scale_factor: Factor to scale all positions and velocities (default: 1.0, higher values = smaller scale)
+            topography_manager: Optional TopographyManager instance for terrain data
+            ref_origin: Reference origin point in ENU coordinates (x, y, z) in meters (default: (0.0, 0.0, 0.0))
+            visualization_mode: Visualization mode - 'auto', 'topography', or 'satellite' (default: 'auto')
+            topology_offset: Offset in meters to position terrain relative to z=0 (default: 300.0)
+            scale_factor: Scaling factor for visualization elements (default: 1.0)
+            
+        Returns:
+            None: Initializes the TrajectoryVisualizer instance
         """
         self.topography_manager = topography_manager or TopographyManager(ref_origin=ref_origin)
         self.ref_origin = ref_origin
@@ -642,7 +726,7 @@ class TrajectoryVisualizer:
         self.plotter = None
         self.topography_mesh = None
         self.backdrop_mesh = None
-        self.animation_data = []
+        self.animation_data = {}
         
         # Register cleanup
         register_cleanup()
@@ -691,14 +775,28 @@ class TrajectoryVisualizer:
         
         # Clear large data structures
         self.topography_mesh = None
-        self.animation_data = []
+        self.animation_data = {}
         
         # Force garbage collection
-        import gc
         gc.collect()
     
     def load_trajectories_from_json(self, json_file: str) -> List[Trajectory]:
-        """Load trajectory data from JSON file."""
+        """
+        Load trajectory data from a JSON file.
+        
+        Parses trajectory data from JSON format and creates Trajectory objects.
+        
+        Args:
+            json_file: Path to the JSON file containing trajectory data
+            
+        Returns:
+            List[Trajectory]: List of Trajectory objects loaded from the JSON file
+            
+        Raises:
+            FileNotFoundError: If the JSON file does not exist
+            KeyError: If required trajectory data fields are missing
+            ValueError: If trajectory data format is invalid
+        """
         with open(json_file, 'r') as f:
             data = json.load(f)
         
@@ -967,7 +1065,15 @@ class TrajectoryVisualizer:
             return []
     
     def calculate_bounds(self) -> Tuple[float, float, float, float]:
-        """Calculate the bounding box for all trajectories and missiles."""
+        """
+        Calculate the bounding box for all trajectory and missile data.
+        
+        Determines the minimum and maximum x, y coordinates from all trajectory points,
+        missiles, protected regions, and radar stations to define the visualization area.
+        
+        Returns:
+            Tuple[float, float, float, float]: Bounding box as (x_min, x_max, y_min, y_max) in meters
+        """
         all_positions = []
         
         # Add trajectory positions
@@ -992,8 +1098,17 @@ class TrajectoryVisualizer:
         return (x_min - padding, x_max + padding, y_min - padding, y_max + padding)
     
     def setup_topography(self, bounds: Tuple[float, float, float, float], satellite_path: str = None, topology_offset: float = 300.0):
-        """Setup topographic data for visualization with optional satellite overlay."""
-        import numpy as np
+        """
+        Setup topographic data for visualization with optional satellite overlay.
+        
+        Args:
+            bounds: Tuple of (x_min, x_max, y_min, y_max) defining the simulation area in ENU meters
+            satellite_path: Optional path to satellite imagery file for overlay
+            topology_offset: Offset in meters to position the terrain surface relative to z=0
+            
+        Returns:
+            None: Sets self.topography_mesh and optionally self.backdrop_mesh
+        """
         print("Setting up topography...")
         
         # If satellite imagery is provided, use a flat mesh matching the simulation bounds
@@ -1003,41 +1118,14 @@ class TrajectoryVisualizer:
             if success:
                 print("Satellite imagery loaded successfully")
                 print("Using flat surface scaled to simulation bounds for visualization")
-                import rasterio
-                import numpy as np
-                # Load the image and get its shape
-                with rasterio.open(satellite_path) as src:
-                    # Crop or resample to a reasonable size (e.g., 1000x1000)
-                    height, width = src.shape
-                    max_dim = 1000
-                    if height > max_dim or width > max_dim:
-                        # Calculate window to crop center
-                        start_row = height // 2 - max_dim // 2
-                        start_col = width // 2 - max_dim // 2
-                        end_row = start_row + max_dim
-                        end_col = start_col + max_dim
-                        if src.count >= 3:
-                            img = src.read([1, 2, 3], window=((start_row, end_row), (start_col, end_col)))
-                        else:
-                            img = src.read(1, window=((start_row, end_row), (start_col, end_col)))
-                            img = np.stack([img, img, img], axis=0)
-                        img_height, img_width = max_dim, max_dim
-                    else:
-                        if src.count >= 3:
-                            img = src.read([1, 2, 3])
-                        else:
-                            img = src.read(1)
-                            img = np.stack([img, img, img], axis=0)
-                        img_height, img_width = height, width
                 # Use simulation bounds for mesh
                 x_min, x_max, y_min, y_max = bounds
-                x_coords = np.linspace(x_min, x_max, img_width)
-                y_coords = np.linspace(y_min, y_max, img_height)
+                x_coords = np.linspace(x_min, x_max, 200)
+                y_coords = np.linspace(y_min, y_max, 200)
                 X, Y = np.meshgrid(x_coords, y_coords)
                 Z = np.zeros_like(X)  # Surface at z=0
                 print(f"Created flat surface with shape: {X.shape} covering bounds: {bounds} at altitude 0m")
                 # Create PyVista mesh
-                import pyvista as pv
                 grid = pv.StructuredGrid()
                 grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
                 grid.dimensions = [X.shape[1], X.shape[0], 1]
@@ -1053,24 +1141,83 @@ class TrajectoryVisualizer:
                 self.topography_mesh = surface
                 return
             else:
-                print("Failed to load satellite imagery, using topography only")
-        # Otherwise, use the original topography pipeline
-        topo_data = self.topography_manager.get_dem_data(bounds)
-        if topo_data is None:
-            print("Failed to get topography, using flat surface")
-            return
-        X, Y, Z = topo_data
-        if X.ndim != 2 or Y.ndim != 2 or Z.ndim != 2:
-            print("Error: Topography arrays must be 2D")
-            return
-        if X.shape != Y.shape or Y.shape != Z.shape:
-            print("Error: Topography arrays must have the same shape")
-            return
+                print("Failed to load satellite imagery, using default flat plane")
         
-        # Create a flat plane that extends forever as a backdrop
-        # Calculate extended bounds to ensure the plane covers the entire view
+        # Only try to get topography data if visualization_mode is 'topography'
+        if self.visualization_mode == 'topography':
+            print("Topography mode selected - attempting to load topography data...")
+            topo_data = self.topography_manager.get_dem_data(bounds)
+            if topo_data is not None:
+                X, Y, Z = topo_data
+                if X.ndim != 2 or Y.ndim != 2 or Z.ndim != 2:
+                    print("Error: Topography arrays must be 2D, using default flat plane")
+                elif X.shape != Y.shape or Y.shape != Z.shape:
+                    print("Error: Topography arrays must have the same shape, using default flat plane")
+                else:
+                    # Create a flat plane that extends forever as a backdrop
+                    # Calculate extended bounds to ensure the plane covers the entire view
+                    x_min, x_max, y_min, y_max = bounds
+                    padding = max(x_max - x_min, y_max - y_min) * 3.0  # Large padding to extend beyond view
+                    
+                    # Create extended coordinates for a much larger plane
+                    x_min_extended = x_min - padding
+                    x_max_extended = x_max + padding
+                    y_min_extended = y_min - padding
+                    y_max_extended = y_max + padding
+                    
+                    # Use the topology offset to position the plane
+                    surface_level = topology_offset
+                    z_level = -surface_level  # Plane at negative z to be below objects at z=0
+                    
+                    print(f"Creating flat tan ground plane extending from ({x_min_extended:.1f}, {y_min_extended:.1f}) to ({x_max_extended:.1f}, {y_max_extended:.1f})")
+                    print(f"Ground plane at z={z_level:.1f}m")
+                    print(f"Objects at z=0 will appear {surface_level:.1f}m above the ground plane")
+                    
+                    # Create a simple large rectangular plane as backdrop
+                    backdrop_plane = pv.Plane(
+                        center=(0, 0, z_level),
+                        direction=(0, 0, 1),
+                        i_size=x_max_extended - x_min_extended,
+                        j_size=y_max_extended - y_min_extended,
+                        i_resolution=100,
+                        j_resolution=100
+                    )
+                    
+                    # Create the actual topography mesh
+                    print(f"Creating topography mesh with shape: {X.shape}")
+                    print(f"Original topography elevation range: {Z.min():.1f}m to {Z.max():.1f}m")
+                    
+                    # Shift the topography down using the provided topology offset
+                    Z = Z - surface_level
+                    print(f"Shifting topography down by {surface_level}m")
+                    print(f"Adjusted topography elevation range: {Z.min():.1f}m to {Z.max():.1f}m")
+                    
+                    # Create topography mesh
+                    grid = pv.StructuredGrid()
+                    grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
+                    grid.dimensions = [X.shape[1], X.shape[0], 1]
+                    grid.point_data['elevation'] = Z.flatten()
+                    
+                    # Create surface mesh from grid
+                    surface = grid.extract_surface()
+                    surface = surface.smooth(n_iter=10, relaxation_factor=0.1)
+                    surface.point_data['elevation'] = Z.flatten()
+                    
+                    # Store both meshes - we'll render the backdrop first, then the topography on top
+                    self.backdrop_mesh = backdrop_plane
+                    self.topography_mesh = surface
+                    return
+            else:
+                print("No topography data available, using default flat plane")
+        else:
+            print(f"Visualization mode '{self.visualization_mode}' - using default flat plane")
+        
+        # Default case: Create a simple flat plane for 'auto' mode or when no topography data
+        print("Creating default flat plane for visualization")
         x_min, x_max, y_min, y_max = bounds
-        padding = max(x_max - x_min, y_max - y_min) * 3.0  # Large padding to extend beyond view
+        
+        # Create a large flat plane that covers the simulation area
+        padding = max(x_max - x_min, y_max - y_min) * 2.0  # Large padding to extend beyond view
         
         # Create extended coordinates for a much larger plane
         x_min_extended = x_min - padding
@@ -1082,12 +1229,11 @@ class TrajectoryVisualizer:
         surface_level = topology_offset
         z_level = -surface_level  # Plane at negative z to be below objects at z=0
         
-        print(f"Creating flat tan ground plane extending from ({x_min_extended:.1f}, {y_min_extended:.1f}) to ({x_max_extended:.1f}, {y_max_extended:.1f})")
+        print(f"Creating default flat tan ground plane extending from ({x_min_extended:.1f}, {y_min_extended:.1f}) to ({x_max_extended:.1f}, {y_max_extended:.1f})")
         print(f"Ground plane at z={z_level:.1f}m")
         print(f"Objects at z=0 will appear {surface_level:.1f}m above the ground plane")
         
         # Create a simple large rectangular plane as backdrop
-        import pyvista as pv
         backdrop_plane = pv.Plane(
             center=(0, 0, z_level),
             direction=(0, 0, 1),
@@ -1097,32 +1243,24 @@ class TrajectoryVisualizer:
             j_resolution=100
         )
         
-        # Create the actual topography mesh
-        print(f"Creating topography mesh with shape: {X.shape}")
-        print(f"Original topography elevation range: {Z.min():.1f}m to {Z.max():.1f}m")
-        
-        # Shift the topography down using the provided topology offset
-        Z = Z - surface_level
-        print(f"Shifting topography down by {surface_level}m")
-        print(f"Adjusted topography elevation range: {Z.min():.1f}m to {Z.max():.1f}m")
-        
-        # Create topography mesh
-        grid = pv.StructuredGrid()
-        grid.points = np.column_stack([X.flatten(), Y.flatten(), Z.flatten()])
-        grid.dimensions = [X.shape[1], X.shape[0], 1]
-        grid.point_data['elevation'] = Z.flatten()
-        
-        # Create surface mesh from grid
-        surface = grid.extract_surface()
-        surface = surface.smooth(n_iter=10, relaxation_factor=0.1)
-        surface.point_data['elevation'] = Z.flatten()
-        
-        # Store both meshes - we'll render the backdrop first, then the topography on top
+        # Only use the large backdrop plane for both meshes
         self.backdrop_mesh = backdrop_plane
-        self.topography_mesh = surface
+        self.topography_mesh = backdrop_plane
     
     def create_trajectory_meshes(self) -> Dict[int, pv.PolyData]:
-        """Create PyVista meshes for all trajectories."""
+        """
+        Create PyVista meshes for all trajectories.
+        
+        Creates line meshes for trajectory paths and velocity vector arrows for each point.
+        
+        Returns:
+            Dict[int, pv.PolyData]: Dictionary mapping trajectory ID to mesh data containing:
+                - 'line': PyVista PolyData for the trajectory path
+                - 'velocity_vectors': PyVista PolyData for velocity arrows
+                - 'positions': numpy array of trajectory positions
+                - 'velocities': numpy array of trajectory velocities
+                - 'times': numpy array of trajectory times
+        """
         trajectory_meshes = {}
         
         for trajectory in self.trajectories:
@@ -1175,7 +1313,19 @@ class TrajectoryVisualizer:
         return trajectory_meshes
     
     def create_missile_meshes(self) -> Dict[int, pv.PolyData]:
-        """Create PyVista meshes for all missiles."""
+        """
+        Create PyVista meshes for all missiles.
+        
+        Creates line meshes for missile paths and velocity vector arrows for each point.
+        
+        Returns:
+            Dict[int, pv.PolyData]: Dictionary mapping missile ID to mesh data containing:
+                - 'line': PyVista PolyData for the missile path
+                - 'velocity_vectors': PyVista PolyData for velocity arrows
+                - 'positions': numpy array of missile positions
+                - 'velocities': numpy array of missile velocities
+                - 'times': numpy array of missile times
+        """
         missile_meshes = {}
         
         for missile in self.missiles:
@@ -1250,7 +1400,18 @@ class TrajectoryVisualizer:
         return protected_region_meshes
     
     def setup_visualization(self, window_size: Tuple[int, int] = (1920, 1080), off_screen: bool = False):
-        """Setup the main visualization window."""
+        """
+        Setup the PyVista visualization environment.
+        
+        Initializes the PyVista plotter with appropriate settings for trajectory visualization.
+        
+        Args:
+            window_size: Tuple of (width, height) for the visualization window in pixels (default: (1920, 1080))
+            off_screen: Whether to render off-screen (useful for headless servers) (default: False)
+            
+        Returns:
+            None: Sets up self.plotter with the configured PyVista plotter
+        """
         # Check if running in WSLg and adjust window size accordingly
         is_wslg = False
         try:
@@ -1469,7 +1630,7 @@ class TrajectoryVisualizer:
                             missile_meshes: Dict[int, pv.PolyData] = None,
                             intermediate_frames: int = 4):
         """Prepare data for animation with trails and interpolation."""
-        self.animation_data = []
+        self.animation_data = {}
         
         # Use global time steps if available, otherwise extract from trajectories
         if self.global_time_steps:
@@ -1621,7 +1782,7 @@ class TrajectoryVisualizer:
                         'participants': event.participants
                     })
             
-            self.animation_data.append(frame_data)
+            self.animation_data[time] = frame_data
     
     def _interpolate_position_velocity(self, times, positions, velocities, target_time):
         """Interpolate position and velocity between waypoints with proper speed scaling."""
@@ -1670,7 +1831,23 @@ class TrajectoryVisualizer:
                            missile_meshes: Dict[int, pv.PolyData] = None,
                            fps: int = 10, save_path: str = None, video_zoom: float = 1.0,
                            intermediate_frames: int = 4):
-        """Create an animation of the trajectories and missiles."""
+        """
+        Create an animated video of trajectory movements.
+        
+        Generates a video showing the movement of trajectories and missiles over time,
+        with optional trail effects and collision animations.
+        
+        Args:
+            trajectory_meshes: Dictionary of trajectory ID to mesh data
+            missile_meshes: Optional dictionary of missile ID to mesh data (default: None)
+            fps: Frames per second for the video (default: 10)
+            save_path: Optional path to save the video file (default: None)
+            video_zoom: Zoom factor for the camera (default: 1.0)
+            intermediate_frames: Number of intermediate frames between time steps (default: 4)
+            
+        Returns:
+            None: Creates and optionally saves the animated video
+        """
         if not self.animation_data:
             self.create_animation_data(trajectory_meshes, missile_meshes, intermediate_frames)
         
@@ -1702,7 +1879,7 @@ class TrajectoryVisualizer:
             # Track dynamic actors to clear each frame
             dynamic_actors = []
             
-            for i, frame_data in enumerate(self.animation_data):
+            for i, frame_data in enumerate(self.animation_data.values()):
                 # Clear only dynamic actors from previous frame
                 for actor in dynamic_actors:
                     self.plotter.remove_actor(actor)
@@ -2051,9 +2228,7 @@ class TrajectoryVisualizer:
     
     def _create_video_from_frames(self, frame_paths: List[str], output_path: str, fps: int):
         """Create video from frame images using ffmpeg."""
-        try:
-            import subprocess
-            
+        try:            
             # Create ffmpeg command
             cmd = [
                 'ffmpeg', '-y',  # Overwrite output file
@@ -2104,7 +2279,20 @@ class TrajectoryVisualizer:
         print(f"Camera set with zoom factor: {zoom_factor}")
     
     def create_static_visualization(self, save_path: str = None, satellite_path: str = None, photo_zoom: float = 1.0):
-        """Create a static visualization of all trajectories with optional satellite overlay."""
+        """
+        Create a static 3D visualization and optionally save it as an image.
+        
+        Generates a complete 3D scene with all trajectories, missiles, protected regions,
+        radar stations, and terrain, then renders it as a static image.
+        
+        Args:
+            save_path: Optional path to save the rendered image (default: None)
+            satellite_path: Optional path to satellite imagery for terrain overlay (default: None)
+            photo_zoom: Zoom factor for the camera (default: 1.0)
+            
+        Returns:
+            None: Creates and optionally saves the static visualization
+        """
         if not self.trajectories:
             print("No trajectories loaded!")
             return
@@ -2182,7 +2370,18 @@ class TrajectoryVisualizer:
             self.plotter.show()
     
     def create_interactive_visualization(self, satellite_path: str = None):
-        """Create an interactive visualization with optional satellite overlay."""
+        """
+        Create an interactive 3D visualization window.
+        
+        Generates a complete 3D scene with all trajectories, missiles, protected regions,
+        radar stations, and terrain, then displays it in an interactive PyVista window.
+        
+        Args:
+            satellite_path: Optional path to satellite imagery for terrain overlay (default: None)
+            
+        Returns:
+            None: Opens an interactive 3D visualization window
+        """
         if not self.trajectories:
             print("No trajectories loaded!")
             return
@@ -2596,7 +2795,7 @@ class TrajectoryVisualizer:
             # Track dynamic actors to clear each frame
             dynamic_actors = []
             
-            for i, frame_data in enumerate(self.animation_data):
+            for i, frame_data in enumerate(self.animation_data.values()):
                 # Clear only dynamic actors from previous frame
                 for actor in dynamic_actors:
                     self.plotter.remove_actor(actor)
@@ -2951,7 +3150,6 @@ class TrajectoryVisualizer:
             faces.extend(top_face)
             
             # Create PyVista mesh
-            import pyvista as pv
             mesh = pv.PolyData(all_points, faces)
             
             # Add to plot
@@ -3150,34 +3348,9 @@ Examples:
             satellite_path = None
             
         else:  # args.mode == 'auto'
-            # Auto-detect mode (original behavior)
-            if os.path.exists(satellite_data_dir):
-                # First look for quick version for faster processing
-                quick_path = os.path.join(satellite_data_dir, "naip_quick.tif")
-                if os.path.exists(quick_path):
-                    satellite_path = quick_path
-                    file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                    print(f"Auto-detected quick satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
-                else:
-                    # Fallback to high-resolution files if quick version not available
-                    jp2_files = [f for f in os.listdir(satellite_data_dir) if f.lower().endswith('.jp2')]
-                    if jp2_files:
-                        # Use the largest JP2 file (highest resolution)
-                        jp2_files.sort(key=lambda x: os.path.getsize(os.path.join(satellite_data_dir, x)), reverse=True)
-                        satellite_path = os.path.join(satellite_data_dir, jp2_files[0])
-                        file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                        print(f"Auto-detected high-resolution JP2 satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
-                    else:
-                        # Look for other satellite image formats
-                        for ext in ['.tif', '.tiff', '.bil', '.img', '.jpg', '.jpeg', '.png', '.jpeg2000']:
-                            for file in os.listdir(satellite_data_dir):
-                                if file.lower().endswith(ext):
-                                    satellite_path = os.path.join(satellite_data_dir, file)
-                                    file_size_mb = os.path.getsize(satellite_path) / (1024 * 1024)
-                                    print(f"Auto-detected satellite imagery: {satellite_path} ({file_size_mb:.1f}MB)")
-                                    break
-                            if satellite_path:
-                                break
+            # Auto-detect mode - default to flat plane for simplicity
+            print("Auto mode selected - using default flat plane for visualization")
+            satellite_path = None
         
         # Create static visualization
         print("Creating static visualization...")
@@ -3261,7 +3434,6 @@ Examples:
         print("\nInterrupted by user")
     except Exception as e:
         print(f"\nError: {e}")
-        import traceback
         traceback.print_exc()
     finally:
         # Clean up resources
